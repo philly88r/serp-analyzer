@@ -63,8 +63,11 @@ class SerpAnalyzer:
             num_results (int): Number of results to extract
             
         Returns:
-            list: List of dictionaries containing search results
+            list: List of dictionaries containing search results, or empty list if error
         """
+        # Initialize an empty list to ensure we always return a list even on error
+        search_results = []
+        
         search_url = f"https://www.google.com/search?q={quote_plus(query)}"
         print(f"Searching Google for: {query}")
         
@@ -105,7 +108,8 @@ class SerpAnalyzer:
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
         
         try:
-            async with AsyncWebCrawler(config=self.browser_config) as crawler:
+            # Create a new crawler with no config to avoid the verbose parameter conflict
+            async with AsyncWebCrawler() as crawler:
                 # Use the browser_options we defined above
                 browser_options["url"] = search_url
                 print(f"Starting crawler with options: {browser_options}")
@@ -113,15 +117,16 @@ class SerpAnalyzer:
             
             if not result.success:
                 print(f"Error searching Google: {result.error_message}")
-                return []
+                return search_results
         except Exception as e:
             print(f"Error during search: {str(e)}")
-            return []
-            
-            # Extract search results using CSS selectors
-            # Google search results are typically in divs with class 'g'
-            search_results = []
-            
+            return search_results
+        
+        # Extract search results using CSS selectors
+        # Google search results are typically in divs with class 'g'
+        search_results = []
+        
+        try:
             # Use Crawl4AI's HTML parser to extract search results
             soup = result.soup
             
@@ -147,10 +152,14 @@ class SerpAnalyzer:
                                 "url": url,
                                 "snippet": snippet
                             })
-                except Exception as e:
-                    print(f"Error extracting search result: {e}")
+                except Exception as extract_error:
+                    print(f"Error extracting search result: {str(extract_error)}")
+                    continue
             
             print(f"Found {len(search_results)} search results")
+            return search_results
+        except Exception as e:
+            print(f"Error parsing search results: {str(e)}")
             return search_results
     
     async def analyze_page(self, url):
@@ -200,7 +209,8 @@ class SerpAnalyzer:
             })
         
         try:
-            async with AsyncWebCrawler(config=self.browser_config) as crawler:
+            # Create a new crawler with no config to avoid the verbose parameter conflict
+            async with AsyncWebCrawler() as crawler:
                 result = await crawler.arun(**browser_options)
         except Exception as e:
             print(f"Error analyzing page {url}: {str(e)}")
