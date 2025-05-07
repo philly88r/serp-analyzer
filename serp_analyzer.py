@@ -1,4 +1,4 @@
-import asyncio
+`import asyncio
 import os
 import json
 import pandas as pd
@@ -389,30 +389,56 @@ class SerpAnalyzer:
             dict: Dictionary containing SERP analysis data
         """
         # Search Google and get top results
-        search_results = await self.search_google(query, num_results)
-        
-        if not search_results:
-            print("No search results found")
+        try:
+            print(f"Analyzing SERP for query: {query}")
+            search_results = await self.search_google(query, num_results)
+            
+            # Debug information
+            print(f"Search results type: {type(search_results)}")
+            print(f"Search results count: {len(search_results) if search_results else 0}")
+            
+            if not search_results or len(search_results) == 0:
+                print(f"No search results found for query: {query}")
+                return {
+                    "query": query,
+                    "timestamp": datetime.now().isoformat(),
+                    "success": False,
+                    "error": "No search results found",
+                    "results": []
+                }
+        except Exception as e:
+            print(f"Error during search_google: {str(e)}")
             return {
                 "query": query,
                 "timestamp": datetime.now().isoformat(),
                 "success": False,
-                "error": "No search results found",
+                "error": f"Error during search: {str(e)}",
                 "results": []
             }
         
         # Analyze each result page
         analyzed_results = []
         for result in search_results:
-            analysis = await self.analyze_page(result["url"])
-            
-            # Combine search result data with page analysis
-            full_result = {
-                **result,
-                **analysis
-            }
-            
-            analyzed_results.append(full_result)
+            try:
+                print(f"Analyzing page: {result['url']}")
+                analysis = await self.analyze_page(result["url"])
+                
+                # Combine search result data with page analysis
+                full_result = {
+                    **result,
+                    **analysis
+                }
+                
+                analyzed_results.append(full_result)
+            except Exception as e:
+                print(f"Error analyzing page {result['url']}: {str(e)}")
+                # Add the result with error information
+                error_result = {
+                    **result,
+                    "success": False,
+                    "error": f"Error during analysis: {str(e)}"
+                }
+                analyzed_results.append(error_result)
         
         # Compile complete SERP analysis
         serp_analysis = {
