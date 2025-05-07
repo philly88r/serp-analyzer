@@ -22,6 +22,16 @@ def setup_playwright():
     is_heroku = 'DYNO' in os.environ
     logger.info(f"Running on Heroku: {is_heroku}")
     
+    # Set environment variables for Playwright on Heroku
+    if is_heroku:
+        # Set the path where Playwright browsers will be installed
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
+        logger.info(f"Set PLAYWRIGHT_BROWSERS_PATH to {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
+        
+        # Disable sandbox for Chromium on Heroku
+        os.environ['PLAYWRIGHT_CHROMIUM_ARGS'] = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage'
+        logger.info(f"Set PLAYWRIGHT_CHROMIUM_ARGS to {os.environ.get('PLAYWRIGHT_CHROMIUM_ARGS')}")
+    
     # Check for PLAYWRIGHT_BUILDPACK_BROWSERS environment variable
     playwright_browsers = os.environ.get('PLAYWRIGHT_BUILDPACK_BROWSERS', '')
     logger.info(f"PLAYWRIGHT_BUILDPACK_BROWSERS: {playwright_browsers}")
@@ -79,10 +89,10 @@ def setup_playwright():
                     
                     # Try different installation methods
                     methods = [
-                        ["playwright", "install", "chromium"],
+                        [sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"],
+                        [sys.executable, "-m", "playwright", "install", "chromium"],
                         ["playwright", "install", "chromium", "--with-deps"],
-                        ["python", "-m", "playwright", "install", "chromium"],
-                        ["python", "-m", "playwright", "install", "chromium", "--with-deps"]
+                        ["playwright", "install", "chromium"]
                     ]
                     
                     success = False
@@ -127,6 +137,7 @@ def setup_playwright():
                 if is_heroku:
                     browser_args = {
                         "chromium_sandbox": False,
+                        "executable_path": None,  # Let Playwright find the executable
                         "args": [
                             "--no-sandbox",
                             "--disable-setuid-sandbox",
@@ -135,8 +146,15 @@ def setup_playwright():
                             "--single-process",
                             f"--user-data-dir={browser_cache_dir}"
                         ],
-                        "ignore_default_args": ["--disable-extensions"]
+                        "ignore_default_args": ["--disable-extensions"],
+                        "timeout": 30000  # Increase timeout to 30 seconds
                     }
+                    
+                    # Log all environment variables for debugging
+                    logger.info("Environment variables:")
+                    for key, value in os.environ.items():
+                        if "PLAYWRIGHT" in key or "CHROME" in key or "BROWSER" in key:
+                            logger.info(f"  {key}: {value}")
                 
                 # Try to launch the browser
                 logger.info(f"Launching browser with args: {browser_args}")

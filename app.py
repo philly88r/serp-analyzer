@@ -49,14 +49,39 @@ if BROWSER_AUTOMATION_AVAILABLE:
         is_heroku = 'DYNO' in os.environ
         if is_heroku:
             print("Running on Heroku, configuring Playwright...")
+            
+            # Set environment variables for Playwright on Heroku
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
+            os.environ['PLAYWRIGHT_CHROMIUM_ARGS'] = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage'
+            print(f"Set PLAYWRIGHT_BROWSERS_PATH to {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
+            print(f"Set PLAYWRIGHT_CHROMIUM_ARGS to {os.environ.get('PLAYWRIGHT_CHROMIUM_ARGS')}")
+            
+            # Log all environment variables related to Playwright for debugging
+            print("Environment variables related to Playwright:")
+            for key, value in os.environ.items():
+                if "PLAYWRIGHT" in key or "CHROME" in key or "BROWSER" in key:
+                    print(f"  {key}: {value}")
+            
             try:
-                # Try to install Playwright browsers if needed
+                # Try to access the browser without installing
                 print("Checking for Playwright browsers...")
-                
-                # First try to access the browser without installing
                 try:
                     with sync_playwright() as p:
-                        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+                        browser_args = {
+                            "chromium_sandbox": False,
+                            "executable_path": None,  # Let Playwright find the executable
+                            "args": [
+                                "--no-sandbox",
+                                "--disable-setuid-sandbox",
+                                "--disable-dev-shm-usage",
+                                "--disable-gpu",
+                                "--single-process"
+                            ],
+                            "ignore_default_args": ["--disable-extensions"],
+                            "timeout": 30000  # Increase timeout to 30 seconds
+                        }
+                        print(f"Launching browser with args: {browser_args}")
+                        browser = p.chromium.launch(**browser_args)
                         page = browser.new_page()
                         page.goto("https://example.com")
                         title = page.title()
@@ -66,7 +91,8 @@ if BROWSER_AUTOMATION_AVAILABLE:
                 except Exception as browser_error:
                     print(f"Browser test failed, trying to install: {str(browser_error)}")
                     # Try to install Playwright browsers
-                    subprocess.run(["playwright", "install", "chromium"], check=False)
+                    print("Installing Playwright browsers...")
+                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"], check=False)
                     
                     # Test again after installation
                     try:
