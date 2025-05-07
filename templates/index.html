@@ -5,15 +5,7 @@
 {% block content %}
 <div class="row">
     <div class="col-md-12">
-        {% if not browser_automation_available %}
-        <div class="alert alert-warning" role="alert">
-            <h4 class="alert-heading"><i class="fas fa-exclamation-triangle me-2"></i>Limited Functionality Mode</h4>
-            <p>This deployment is running in limited functionality mode without browser automation capabilities.</p>
-            <p>For full functionality including SERP analysis and blog generation, please use a local deployment with all dependencies installed.</p>
-            <hr>
-            <p class="mb-0">You can still browse previously generated content if available.</p>
-        </div>
-        {% endif %}
+
         <div class="card mb-4">
             <div class="card-header">
                 <h4 class="mb-0"><i class="fas fa-search me-2"></i>SEO Analysis & Blog Generation</h4>
