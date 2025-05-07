@@ -1,0 +1,124 @@
+{% extends 'base.html' %}
+
+{% block title %}SEO Analyzer & Blog Generator - Home{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4 class="mb-0"><i class="fas fa-search me-2"></i>SEO Analysis & Blog Generation</h4>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5 class="mb-3">Start a New Analysis</h5>
+                        <form action="{{ url_for('search') }}" method="post" class="search-form">
+                            <div class="mb-3">
+                                <label for="query" class="form-label">Search Query / Keyword</label>
+                                <input type="text" class="form-control" id="query" name="query" placeholder="Enter keyword to analyze (e.g. custom smartphone holder)" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="num_results" class="form-label">Number of Results to Analyze</label>
+                                <select class="form-select" id="num_results" name="num_results">
+                                    <option value="6">6 results (Recommended)</option>
+                                    <option value="10">10 results</option>
+                                    <option value="15">15 results</option>
+                                    <option value="20">20 results</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-search me-1"></i> Analyze SERP
+                            </button>
+                        </form>
+                    </div>
+                    <div class="col-md-6">
+                        <h5 class="mb-3">How It Works</h5>
+                        <div class="card bg-light">
+                            <div class="card-body">
+                                <ol class="mb-0">
+                                    <li class="mb-2"><strong>Enter a Keyword</strong> - Start by entering the keyword you want to rank for.</li>
+                                    <li class="mb-2"><strong>Analyze SERP</strong> - The system will analyze the top search results for your keyword.</li>
+                                    <li class="mb-2"><strong>Generate SEO Analysis</strong> - Create a detailed comparative SEO analysis.</li>
+                                    <li class="mb-2"><strong>Generate Blog Post</strong> - Create an SEO-optimized blog post that outranks competitors.</li>
+                                    <li class="mb-2"><strong>Download or View</strong> - View the results online or download them for offline use.</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if results %}
+        <div class="card">
+            <div class="card-header">
+                <h4 class="mb-0"><i class="fas fa-list me-2"></i>Previous Analyses</h4>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Query</th>
+                                <th>Date</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for result in results %}
+                            <tr>
+                                <td>{{ result.query }}</td>
+                                <td>{{ result.timestamp.strftime('%Y-%m-%d %H:%M') }}</td>
+                                <td>
+                                    <span class="badge bg-success">SERP Data</span>
+                                    {% if result.analysis_exists %}
+                                    <span class="badge bg-info">SEO Analysis</span>
+                                    {% endif %}
+                                    {% if result.blog_exists %}
+                                    <span class="badge bg-primary">Blog Post</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="btn-group">
+                                        <a href="{{ url_for('view_results', query=result.query) }}" class="btn btn-sm btn-outline-primary">
+                                            <i class="fas fa-chart-bar"></i> View SERP
+                                        </a>
+                                        
+                                        {% if result.analysis_exists %}
+                                        <a href="{{ url_for('view_analysis', query=result.query) }}" class="btn btn-sm btn-outline-info">
+                                            <i class="fas fa-file-alt"></i> View Analysis
+                                        </a>
+                                        {% else %}
+                                        <a href="{{ url_for('analyze', query=result.query) }}" class="btn btn-sm btn-outline-secondary">
+                                            <i class="fas fa-cogs"></i> Generate Analysis
+                                        </a>
+                                        {% endif %}
+                                        
+                                        {% if result.blog_exists %}
+                                        <a href="{{ url_for('view_blog', query=result.query) }}" class="btn btn-sm btn-outline-success">
+                                            <i class="fas fa-blog"></i> View Blog
+                                        </a>
+                                        {% else %}
+                                        <a href="{{ url_for('generate_blog', query=result.query) }}" class="btn btn-sm btn-outline-secondary">
+                                            <i class="fas fa-pencil-alt"></i> Generate Blog
+                                        </a>
+                                        {% endif %}
+                                        
+                                        <a href="{{ url_for('delete', query=result.query) }}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete all data for this query?')">
+                                            <i class="fas fa-trash"></i>
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

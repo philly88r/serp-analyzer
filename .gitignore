@@ -1,0 +1,56 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+venv/
+ENV/
+.env
+
+# Logs
+logs/
+*.log
+
+# Local development
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Application specific
+uploads/
+results/
+analysis/
+html_reports/
+downloadable_reports/
+
+# Netlify
+.netlify/
+
+# Heroku
+.env
+.venv
+venv/
+ENV/
+*.pyc
+__pycache__/
+.DS_Store

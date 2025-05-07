@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+
+{% block title %}SEO Analysis for "{{ query }}"{% endblock %}
+
+{# Remove the extra_css block - styling will come from Bootstrap and markdown filter #}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('view_results', query=query) }}">SERP Results</a></li>
+                <li class="breadcrumb-item active">SEO Analysis</li>
+            </ol>
+        </nav>
+
+        {# Card for Overall Actions - Keep this outside the loop #}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4 class="mb-0"><i class="fas fa-chart-pie me-2"></i>SEO Analysis for "{{ query }}"</h4>
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5>Actions</h5>
+                    <div>
+                        {# REMOVED Download Markdown button #}
+                        {% if html_file %}
+                        {# UPDATED button text and href #}
+                        <a href="{{ url_for('download', file_type='analysis_html', query=query) }}" class="btn btn-sm btn-outline-info">
+                            <i class="fas fa-download me-1"></i> Download HTML
+                        </a>
+                        {% endif %}
+                        <a href="{{ url_for('generate_blog', query=query) }}" class="btn btn-sm btn-primary">
+                            <i class="fas fa-pencil-alt me-1"></i> Generate Blog Post
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Loop through sections and create a card for each #}
+        {% if sections %}
+            {% for section in sections %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">{{ section.title }}</h5>
+                </div>
+                <div class="card-body">
+                    {# Render the markdown content using the custom filter #}
+                    {{ section.content | markdown | safe }}
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="alert alert-warning" role="alert">
+                No analysis sections found or the content could not be parsed.
+            </div>
+        {% endif %}
+
+    </div>
+</div>
+{% endblock %}
+
+{# Remove the extra_js block - no more client-side markdown rendering needed #}
