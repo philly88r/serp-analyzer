@@ -1,3 +1,2 @@
-# Updated for heroku-22 stack compatibility with Playwright buildpack
-release: python -m playwright install chromium --with-deps
-web: python setup_playwright.py && gunicorn app:app
+# Updated for Heroku deployment with Playwright support
+web: PYTHONPATH=$PYTHONPATH:$PWD python setup_playwright.py && PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright gunicorn app:app

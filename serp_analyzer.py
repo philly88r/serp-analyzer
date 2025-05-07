@@ -39,23 +39,39 @@ class SerpAnalyzer:
         """
         search_url = f"https://www.google.com/search?q={quote_plus(query)}"
         
+        # Check if we're running on Heroku
+        is_heroku = 'DYNO' in os.environ
+        
+        # Configure browser options for Heroku environment
+        browser_options = {
+            "headless": self.headless,
+            "verbose": True,
+            "cache_mode": "bypass",
+            "wait_until": "networkidle",
+            "page_timeout": 30000,
+            "delay_before_return_html": 0.5,
+            "word_count_threshold": 100,
+            "scan_full_page": True,
+            "scroll_delay": 0.3,
+            "process_iframes": False,
+            "remove_overlay_elements": True,
+            "magic": True
+        }
+        
+        # Add Heroku-specific options
+        if is_heroku:
+            browser_options["chromium_sandbox"] = False
+            browser_options["browser_args"] = [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        
         async with AsyncWebCrawler(config=self.browser_config) as crawler:
             print(f"Searching Google for: {query}")
-            result = await crawler.arun(
-                url=search_url,
-                headless=self.headless,
-                verbose=True,
-                cache_mode="bypass",
-                wait_until="networkidle",
-                page_timeout=30000,
-                delay_before_return_html=0.5,
-                word_count_threshold=100,
-                scan_full_page=True,
-                scroll_delay=0.3,
-                process_iframes=False,
-                remove_overlay_elements=True,
-                magic=True
-            )
+            # Use the browser_options we defined above
+            browser_options["url"] = search_url
+            result = await crawler.arun(**browser_options)
             
             if not result.success:
                 print(f"Error searching Google: {result.error_message}")
@@ -108,22 +124,37 @@ class SerpAnalyzer:
         """
         print(f"Analyzing page: {url}")
         
+        # Check if we're running on Heroku
+        is_heroku = 'DYNO' in os.environ
+        
+        # Configure browser options for Heroku environment
+        browser_options = {
+            "url": url,
+            "headless": self.headless,
+            "verbose": True,
+            "cache_mode": "bypass",
+            "wait_until": "networkidle",
+            "page_timeout": 30000,
+            "delay_before_return_html": 1.0,
+            "word_count_threshold": 100,
+            "scan_full_page": True,
+            "scroll_delay": 0.5,
+            "process_iframes": False,
+            "remove_overlay_elements": True,
+            "magic": True
+        }
+        
+        # Add Heroku-specific options
+        if is_heroku:
+            browser_options["chromium_sandbox"] = False
+            browser_options["browser_args"] = [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        
         async with AsyncWebCrawler(config=self.browser_config) as crawler:
-            result = await crawler.arun(
-                url=url,
-                headless=self.headless,
-                verbose=True,
-                cache_mode="bypass",
-                wait_until="networkidle",
-                page_timeout=30000,
-                delay_before_return_html=0.5,
-                word_count_threshold=100,
-                scan_full_page=True,
-                scroll_delay=0.3,
-                process_iframes=False,
-                remove_overlay_elements=True,
-                magic=True
-            )
+            result = await crawler.arun(**browser_options)
             
             if not result.success:
                 print(f"Error analyzing page: {result.error_message}")
