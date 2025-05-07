@@ -22,6 +22,10 @@ def setup_playwright():
     is_heroku = 'DYNO' in os.environ
     logger.info(f"Running on Heroku: {is_heroku}")
     
+    # Check if browser download is skipped
+    skip_browser_download = os.environ.get('PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD', '') == '1'
+    logger.info(f"Skip browser download: {skip_browser_download}")
+    
     # Set environment variables for Playwright on Heroku
     if is_heroku:
         # Set the path where Playwright browsers will be installed
@@ -31,6 +35,11 @@ def setup_playwright():
         # Disable sandbox for Chromium on Heroku
         os.environ['PLAYWRIGHT_CHROMIUM_ARGS'] = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage'
         logger.info(f"Set PLAYWRIGHT_CHROMIUM_ARGS to {os.environ.get('PLAYWRIGHT_CHROMIUM_ARGS')}")
+        
+        # If we're skipping browser download, set this flag to avoid errors
+        if skip_browser_download:
+            os.environ['PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD'] = '1'
+            logger.info("Browser download is skipped. The app will run in limited functionality mode.")
     
     # Check for PLAYWRIGHT_BUILDPACK_BROWSERS environment variable
     playwright_browsers = os.environ.get('PLAYWRIGHT_BUILDPACK_BROWSERS', '')
@@ -128,70 +137,88 @@ def setup_playwright():
                 logger.error(f"Error determining browser path: {e}")
                 # Continue anyway, as the browser might be available through other means
         
+        # If we're skipping browser download, skip verification
+        if skip_browser_download:
+            logger.info("Skipping browser verification since PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is set")
+            logger.info("The app will run in limited functionality mode without browser automation")
+            return True
+            
         # Verify installation by actually launching a browser
         logger.info("Verifying Chromium installation...")
-        with sync_playwright() as p:
-            try:
-                # Use specific launch options for Heroku
-                browser_args = {}
-                if is_heroku:
-                    browser_args = {
-                        "chromium_sandbox": False,
-                        "executable_path": None,  # Let Playwright find the executable
-                        "args": [
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage",
-                            "--disable-gpu",
-                            "--single-process",
-                            f"--user-data-dir={browser_cache_dir}"
-                        ],
-                        "ignore_default_args": ["--disable-extensions"],
-                        "timeout": 30000  # Increase timeout to 30 seconds
-                    }
+        try:
+            with sync_playwright() as p:
+                try:
+                    # Use specific launch options for Heroku
+                    browser_args = {}
+                    if is_heroku:
+                        browser_args = {
+                            "chromium_sandbox": False,
+                            "executable_path": None,  # Let Playwright find the executable
+                            "args": [
+                                "--no-sandbox",
+                                "--disable-setuid-sandbox",
+                                "--disable-dev-shm-usage",
+                                "--disable-gpu",
+                                "--single-process",
+                                f"--user-data-dir={browser_cache_dir}"
+                            ],
+                            "ignore_default_args": ["--disable-extensions"],
+                            "timeout": 30000  # Increase timeout to 30 seconds
+                        }
+                        
+                        # Log all environment variables for debugging
+                        logger.info("Environment variables:")
+                        for key, value in os.environ.items():
+                            if "PLAYWRIGHT" in key or "CHROME" in key or "BROWSER" in key:
+                                logger.info(f"  {key}: {value}")
                     
-                    # Log all environment variables for debugging
-                    logger.info("Environment variables:")
-                    for key, value in os.environ.items():
-                        if "PLAYWRIGHT" in key or "CHROME" in key or "BROWSER" in key:
-                            logger.info(f"  {key}: {value}")
-                
-                # Try to launch the browser
-                logger.info(f"Launching browser with args: {browser_args}")
-                browser = p.chromium.launch(**browser_args)
-                page = browser.new_page()
-                page.goto("https://example.com")
-                title = page.title()
-                logger.info(f"Successfully loaded page with title: {title}")
-                browser.close()
-                logger.info("Chromium is working correctly!")
-                return True
-            except Exception as e:
-                logger.error(f"Error testing Chromium: {e}")
-                
-                # If we're on Heroku, we'll log more details but still return True
-                # as the app might still work with other features
-                if is_heroku:
-                    logger.warning("Browser test failed on Heroku, but continuing anyway")
-                    logger.warning("The app will run with limited functionality")
-                    
-                    # List all directories in the Playwright browsers path
-                    try:
-                        playwright_path = Path("/app/.playwright")
-                        if playwright_path.exists():
-                            logger.info(f"Contents of {playwright_path}:")
-                            for item in playwright_path.iterdir():
-                                logger.info(f"  {item}")
-                                if item.is_dir() and item.name.startswith("chromium-"):
-                                    logger.info(f"  Contents of {item}:")
-                                    for subitem in item.iterdir():
-                                        logger.info(f"    {subitem}")
-                    except Exception as dir_error:
-                        logger.error(f"Error listing Playwright directories: {dir_error}")
-                    
-                    # Return True anyway to allow the app to start
+                    # Try to launch the browser
+                    logger.info(f"Launching browser with args: {browser_args}")
+                    browser = p.chromium.launch(**browser_args)
+                    page = browser.new_page()
+                    page.goto("https://example.com")
+                    title = page.title()
+                    logger.info(f"Successfully loaded page with title: {title}")
+                    browser.close()
+                    logger.info("Chromium is working correctly!")
                     return True
-                return False
+                except Exception as e:
+                    logger.error(f"Error testing Chromium: {e}")
+                    raise e
+        except Exception as e:
+            logger.error(f"Failed to verify browser installation: {e}")
+            
+            if is_heroku:
+                logger.warning("Browser verification failed on Heroku, but continuing anyway")
+                logger.warning("The app will run with limited functionality")
+                return True
+            return False
+    except Exception as e:
+        logger.error(f"Error testing Chromium: {e}")
+        
+        # If we're on Heroku, we'll log more details but still return True
+        # as the app might still work with other features
+        if is_heroku:
+            logger.warning("Browser test failed on Heroku, but continuing anyway")
+            logger.warning("The app will run with limited functionality")
+            
+            # List all directories in the Playwright browsers path
+            try:
+                playwright_path = Path("/app/.playwright")
+                if playwright_path.exists():
+                    logger.info(f"Contents of {playwright_path}:")
+                    for item in playwright_path.iterdir():
+                        logger.info(f"  {item}")
+                        if item.is_dir() and item.name.startswith("chromium-"):
+                            logger.info(f"  Contents of {item}:")
+                            for subitem in item.iterdir():
+                                logger.info(f"    {subitem}")
+            except Exception as dir_error:
+                logger.error(f"Error listing Playwright directories: {dir_error}")
+            
+            # Return True anyway to allow the app to start
+            return True
+        return False
     except Exception as e:
         logger.error(f"Error setting up Playwright: {e}")
         
