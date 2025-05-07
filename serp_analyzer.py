@@ -68,7 +68,8 @@ class SerpAnalyzer:
         # Initialize an empty list to ensure we always return a list even on error
         search_results = []
         
-        search_url = f"https://www.google.com/search?q={quote_plus(query)}"
+        # Set the search region to the United States by adding gl=us and hl=en parameters
+        search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en"
         print(f"Searching Google for: {query}")
         
         # Configure browser options
@@ -127,11 +128,52 @@ class SerpAnalyzer:
         search_results = []
         
         try:
-            # Use Crawl4AI's HTML parser to extract search results
-            soup = result.soup
+            # The Crawl4AI library has changed, so we need to parse the HTML directly
+            from bs4 import BeautifulSoup
             
-            # Find all search result containers
-            result_elements = soup.select("div.g")[:num_results]
+            if not hasattr(result, 'html'):
+                print("Could not find HTML content in the result object")
+                return search_results
+                
+            # Parse the HTML with BeautifulSoup
+            soup = BeautifulSoup(result.html, 'html.parser')
+            
+            # Try different selectors to find search results
+            # Google's HTML structure changes frequently, so we need to try multiple selectors
+            selectors = [
+                "div.g",
+                "div.tF2Cxc", 
+                "div.yuRUbf", 
+                "div[data-sokoban-container]",
+                "div.rc",
+                "div.g div.rc",
+                "div.jtfYYd",
+                "div.MjjYud",
+                "div.v7W49e"
+            ]
+            
+            # Try each selector until we find results
+            result_elements = []
+            for selector in selectors:
+                elements = soup.select(selector)
+                if elements:
+                    print(f"Found {len(elements)} results with selector '{selector}'")
+                    result_elements = elements[:num_results]
+                    break
+                    
+            if not result_elements:
+                # If we still can't find results, look for h3 tags (which usually contain titles)
+                h3_elements = soup.select("h3")
+                if h3_elements:
+                    print(f"Found {len(h3_elements)} h3 elements, trying to find parent result containers")
+                    # For each h3, try to find its parent container
+                    for h3 in h3_elements[:num_results]:
+                        parent = h3.parent
+                        for _ in range(3):  # Go up to 3 levels up to find a container
+                            if parent and parent.name == 'div':
+                                result_elements.append(parent)
+                                break
+                            parent = parent.parent if parent else None
             
             for element in result_elements:
                 try:
@@ -220,16 +262,30 @@ class SerpAnalyzer:
                 "error": str(e)
             }
             
-            if not result.success:
-                print(f"Error analyzing page: {result.error_message}")
+            # Check if the result was successful
+            if hasattr(result, 'success') and not result.success:
+                error_message = getattr(result, 'error_message', 'Unknown error')
+                print(f"Error analyzing page: {error_message}")
                 return {
                     "url": url,
                     "success": False,
-                    "error": result.error_message
+                    "error": error_message
                 }
             
             # Extract SEO data
-            soup = result.soup
+            # The Crawl4AI library has changed, so we need to parse the HTML directly
+            from bs4 import BeautifulSoup
+            
+            if not hasattr(result, 'html'):
+                print("Could not find HTML content in the result object")
+                return {
+                    "url": url,
+                    "success": False,
+                    "error": "Could not find HTML content in the result object"
+                }
+                
+            # Parse the HTML with BeautifulSoup
+            soup = BeautifulSoup(result.html, 'html.parser')
             
             # Basic SEO data
             title = soup.title.get_text() if soup.title else "" 
@@ -285,11 +341,18 @@ class SerpAnalyzer:
                 })
             
             # Page content analysis
-            content_text = result.text
+            # Extract text from the soup object since the Crawl4AI API has changed
+            content_text = soup.get_text()
             word_count = len(content_text.split())
             
             # Get clean markdown content
-            markdown_content = result.markdown
+            # Check if the result has a markdown attribute
+            markdown_content = ""
+            if hasattr(result, 'markdown'):
+                markdown_content = result.markdown
+            else:
+                # If markdown is not available, use the text content
+                markdown_content = content_text
             
             # Compile analysis data
             analysis = {
