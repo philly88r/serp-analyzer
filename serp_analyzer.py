@@ -71,7 +71,7 @@ class SerpAnalyzer:
         # Configure browser options
         browser_options = {
             "headless": self.headless,
-            "verbose": True,
+            # Remove verbose from here as it's likely included in the config
             "cache_mode": "bypass",
             "wait_until": "networkidle",
             "page_timeout": 60000,  # Increased timeout for slower connections
@@ -169,7 +169,7 @@ class SerpAnalyzer:
         browser_options = {
             "url": url,
             "headless": self.headless,
-            "verbose": True,
+            # Remove verbose from here as it's likely included in the config
             "cache_mode": "bypass",
             "wait_until": "networkidle",
             "page_timeout": 60000,  # Increased timeout for slower connections

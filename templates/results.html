@@ -35,7 +35,11 @@
                             {% for result in serp_data.results %}
                                 {% set total_words = total_words + result.word_count|default(0) %}
                             {% endfor %}
-                            {{ (total_words / serp_data.results|length)|int }}
+                            {% if serp_data.results|length > 0 %}
+                                {{ (total_words / serp_data.results|length)|int }}
+                            {% else %}
+                                0
+                            {% endif %}
                         </div>
                         <div class="stat-label">Avg. Word Count</div>
                     </div>
@@ -46,7 +50,11 @@
                             {% for result in serp_data.results %}
                                 {% set total_links = total_links + result.internal_links_count|default(0) + result.external_links_count|default(0) %}
                             {% endfor %}
-                            {{ (total_links / serp_data.results|length)|int }}
+                            {% if serp_data.results|length > 0 %}
+                                {{ (total_links / serp_data.results|length)|int }}
+                            {% else %}
+                                0
+                            {% endif %}
                         </div>
                         <div class="stat-label">Avg. Link Count</div>
                     </div>
