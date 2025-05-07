@@ -1,2 +1,2 @@
 # Updated for Heroku deployment with Playwright support
-web: gunicorn app:app
+web: python setup_playwright.py && gunicorn app:app

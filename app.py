@@ -143,34 +143,52 @@ def search():
     
     try:
         if not BROWSER_AUTOMATION_AVAILABLE:
-            flash('Browser automation is not available in this deployment. Please use a local deployment with browser automation dependencies installed.', 'danger')
+            flash('Browser automation is not available in this deployment. Some features may be limited.', 'warning')
+            # Instead of redirecting, we could potentially use a fallback method or mock data
+            # For now, we'll just inform the user and redirect
             return redirect(url_for('index'))
             
+        # Create necessary directories
+        os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
+        
         # Clean up old results for this query
         if 'serp_analyzer_working' in globals():
-            serp_analyzer_working.clean_results_directory(query)
+            try:
+                serp_analyzer_working.clean_results_directory(query)
+            except Exception as cleanup_error:
+                print(f"Warning: Could not clean up old results: {str(cleanup_error)}")
         
-        # Create necessary directories
-        os.makedirs('results', exist_ok=True)
-        
-        # Create SERP analyzer
-        analyzer = SerpAnalyzer(headless=True)
-        
-        # Run search asynchronously
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        serp_analysis = loop.run_until_complete(analyzer.analyze_serp(query, num_results))
-        loop.close()
-        
-        # Save results
-        analyzer.save_results(serp_analysis, "json")
-        analyzer.save_results(serp_analysis, "csv")
-        
-        flash(f'Successfully analyzed {len(serp_analysis["results"])} search results for "{query}"', 'success')
-        return redirect(url_for('index'))
+        # Create SERP analyzer with Heroku-specific configuration
+        try:
+            # Check if we're running on Heroku
+            is_heroku = 'DYNO' in os.environ
+            
+            # Configure analyzer with appropriate options for the environment
+            analyzer = SerpAnalyzer(headless=True)
+            
+            # Run search asynchronously
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            serp_analysis = loop.run_until_complete(analyzer.analyze_serp(query, num_results))
+            loop.close()
+            
+            # Save results
+            analyzer.save_results(serp_analysis, "json")
+            analyzer.save_results(serp_analysis, "csv")
+            
+            flash(f'Successfully analyzed {len(serp_analysis["results"])} search results for "{query}"', 'success')
+            return redirect(url_for('view_results', query=query))
+        except Exception as browser_error:
+            # Log the specific browser error
+            print(f"Browser automation error: {str(browser_error)}")
+            raise Exception(f"Browser automation error: {str(browser_error)}")
     
     except Exception as e:
-        flash(f'Error during search: {str(e)}', 'danger')
+        error_message = str(e)
+        if "executable doesn't exist" in error_message.lower():
+            flash('Browser executable not found. This is a common issue on Heroku. Please check the Playwright configuration.', 'danger')
+        else:
+            flash(f'Error during search: {error_message}', 'danger')
         return redirect(url_for('index'))
 
 @app.route('/analyze/<query>')
@@ -229,89 +247,138 @@ def view_results(query):
     # Replace spaces with underscores for file operations
     query_file = query.replace(' ', '_')
     
-    # Check if SERP results exist
-    serp_file = os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}.json')
-    if not os.path.exists(serp_file):
-        flash(f'SERP results for "{query}" not found', 'danger')
+    try:
+        # Check if SERP results exist
+        serp_file = os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}.json')
+        
+        # Make sure the results directory exists
+        os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
+        
+        if not os.path.exists(serp_file):
+            # Try to find any file that might match the query (partial match)
+            potential_files = glob.glob(os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}*.json'))
+            if potential_files:
+                serp_file = potential_files[0]  # Use the first matching file
+            else:
+                flash(f'SERP results for "{query}" not found', 'danger')
+                return redirect(url_for('index'))
+        
+        # Load SERP results
+        with open(serp_file, 'r', encoding='utf-8') as f:
+            serp_data = json.load(f)
+        
+        return render_template('results.html', query=query, serp_data=serp_data)
+    except Exception as e:
+        flash(f'Error viewing results for "{query}": {str(e)}', 'danger')
         return redirect(url_for('index'))
-    
-    # Load SERP results
-    with open(serp_file, 'r', encoding='utf-8') as f:
-        serp_data = json.load(f)
-    
-    return render_template('results.html', query=query, serp_data=serp_data)
 
 @app.route('/view_analysis/<query>')
 def view_analysis(query):
     # Replace spaces with underscores for file operations
     query_file = query.replace(' ', '_')
     
-    # Find analysis file
-    analysis_file = None
-    for file in os.listdir(app.config['ANALYSIS_FOLDER']):
-        if file.startswith(f'seo_comparative_analysis_{query_file}_') and file.endswith('.md'):
-            analysis_file = os.path.join(app.config['ANALYSIS_FOLDER'], file)
-            break
-    
-    if not analysis_file:
-        flash(f'SEO analysis for "{query}" not found', 'danger')
+    try:
+        # Make sure directories exist
+        os.makedirs(app.config['ANALYSIS_FOLDER'], exist_ok=True)
+        os.makedirs(app.config['HTML_REPORTS_FOLDER'], exist_ok=True)
+        
+        # Find analysis file
+        analysis_file = None
+        if os.path.exists(app.config['ANALYSIS_FOLDER']):
+            for file in os.listdir(app.config['ANALYSIS_FOLDER']):
+                if file.startswith(f'seo_comparative_analysis_{query_file}_') and file.endswith('.md'):
+                    analysis_file = os.path.join(app.config['ANALYSIS_FOLDER'], file)
+                    break
+        
+        if not analysis_file:
+            flash(f'SEO analysis for "{query}" not found', 'danger')
+            return redirect(url_for('index'))
+        
+        # Load analysis content
+        with open(analysis_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # Parse Markdown Content into Sections
+        sections = []
+        parts = re.split(r'^## +(.*?) *$\n', content, flags=re.MULTILINE)
+        
+        current_title = "Introduction" 
+        current_content = parts[0].strip()
+        sections.append({'title': current_title, 'content': current_content})
+        
+        for i in range(1, len(parts), 2):
+            title = parts[i].strip()
+            markdown_content = parts[i+1].strip() if (i+1) < len(parts) else ""
+            sections.append({'title': title, 'content': markdown_content})
+        
+        # Find HTML version if it exists
+        html_file = None
+        base_name = os.path.basename(analysis_file)
+        html_name = os.path.splitext(base_name)[0] + '.html'
+        html_path = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_name)
+        
+        if os.path.exists(html_path):
+            html_file = html_path
+        else:
+            # Generate HTML if it doesn't exist
+            try:
+                md_to_html.convert_md_to_html(analysis_file, app.config['HTML_REPORTS_FOLDER'])
+                if os.path.exists(html_path):
+                    html_file = html_path
+            except Exception as e:
+                print(f"Error generating HTML: {str(e)}")
+        
+        return render_template('analysis.html', query=query, sections=sections, html_file=html_file)
+    except Exception as e:
+        flash(f'Error viewing analysis for "{query}": {str(e)}', 'danger')
         return redirect(url_for('index'))
     
-    # Load analysis content
-    with open(analysis_file, 'r', encoding='utf-8') as f:
-        content = f.read()
-        
-    # Parse Markdown Content into Sections
-    sections = []
-    parts = re.split(r'^## +(.*?) *$\n', content, flags=re.MULTILINE)
-    
-    current_title = "Introduction" 
-    current_content = parts[0].strip()
-    sections.append({'title': current_title, 'content': current_content})
-    
-    for i in range(1, len(parts), 2):
-        title = parts[i].strip()
-        markdown_content = parts[i+1].strip() if (i+1) < len(parts) else ""
-        sections.append({'title': title, 'content': markdown_content})
-    
-    # Find HTML version if it exists
-    html_file = None
-    base_name = os.path.basename(analysis_file)
-    html_name = os.path.splitext(base_name)[0] + '.html'
-    html_path = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_name)
-    
-    if os.path.exists(html_path):
-        html_file = html_path
-    
-    return render_template('analysis.html', query=query, sections=sections, html_file=html_file)
 
 @app.route('/view_blog/<query>')
 def view_blog(query):
     # Replace spaces with underscores for file operations
     query_file = query.replace(' ', '_')
     
-    # Check if blog exists
-    blog_file = os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}.md')
-    if not os.path.exists(blog_file):
-        flash(f'Blog post for "{query}" not found', 'danger')
+    try:
+        # Make sure directories exist
+        os.makedirs(app.config['BLOG_FOLDER'], exist_ok=True)
+        os.makedirs(app.config['HTML_REPORTS_FOLDER'], exist_ok=True)
+        
+        # Check if blog exists
+        blog_file = os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}.md')
+        
+        # Try to find any matching blog file if exact match not found
+        if not os.path.exists(blog_file):
+            potential_files = glob.glob(os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}*.md'))
+            if potential_files:
+                blog_file = potential_files[0]  # Use the first matching file
+            else:
+                flash(f'Blog post for "{query}" not found', 'danger')
+                return redirect(url_for('index'))
+        
+        # Load blog content
+        with open(blog_file, 'r', encoding='utf-8') as f:
+            blog_content = f.read()
+        
+        # Find HTML version if it exists
+        html_file = None
+        base_name = os.path.basename(blog_file)
+        html_name = base_name.replace('.md', '.html')
+        html_path = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_name)
+        
+        if os.path.exists(html_path):
+            html_file = html_path
+        else:
+            # Convert to HTML if not exists
+            try:
+                html_file = md_to_html.convert_md_to_html(blog_file, app.config['HTML_REPORTS_FOLDER'])
+            except Exception as e:
+                print(f"Error generating HTML: {str(e)}")
+        
+        return render_template('blog.html', query=query, blog_content=blog_content, html_file=html_file)
+    except Exception as e:
+        flash(f'Error viewing blog for "{query}": {str(e)}', 'danger')
         return redirect(url_for('index'))
-    
-    # Load blog content
-    with open(blog_file, 'r', encoding='utf-8') as f:
-        blog_content = f.read()
-    
-    # Find HTML version if it exists
-    html_file = None
-    html_name = f'blog_{query_file}.html'
-    html_path = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_name)
-    
-    if os.path.exists(html_path):
-        html_file = html_path
-    else:
-        # Convert to HTML if not exists
-        html_file = md_to_html.convert_md_to_html(blog_file, app.config['HTML_REPORTS_FOLDER'])
-    
-    return render_template('blog.html', query=query, blog_content=blog_content, html_file=html_file)
 
 @app.route('/download/<file_type>/<query>')
 def download(file_type, query):

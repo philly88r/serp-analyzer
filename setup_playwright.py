@@ -22,55 +22,86 @@ def setup_playwright():
     is_heroku = 'DYNO' in os.environ
     logger.info(f"Running on Heroku: {is_heroku}")
     
+    # Check for PLAYWRIGHT_BUILDPACK_BROWSERS environment variable
+    playwright_browsers = os.environ.get('PLAYWRIGHT_BUILDPACK_BROWSERS', '')
+    logger.info(f"PLAYWRIGHT_BUILDPACK_BROWSERS: {playwright_browsers}")
+    
     try:
         # Check if playwright is installed
         try:
             import playwright
-            logger.info(f"Playwright is installed")
+            from playwright.__version__ import __version__ as playwright_version
+            logger.info(f"Playwright is installed (version: {playwright_version})")
         except ImportError:
             logger.error("Playwright not installed. Please install it with: pip install playwright")
             return False
         
+        # Create a directory for browser cache if it doesn't exist
+        browser_cache_dir = os.path.join(os.getcwd(), '.browser_cache')
+        os.makedirs(browser_cache_dir, exist_ok=True)
+        logger.info(f"Browser cache directory: {browser_cache_dir}")
+        
         # Get the expected browser path
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            executable_path = p.chromium._engine.executable_path
-            logger.info(f"Expected Chromium executable path: {executable_path}")
-            
-            # Check if the browser executable exists
-            if os.path.exists(executable_path):
-                logger.info("Chromium executable already exists")
-            else:
-                logger.info("Chromium executable does not exist, installing...")
+            try:
+                executable_path = p.chromium._engine.executable_path
+                logger.info(f"Expected Chromium executable path: {executable_path}")
                 
-                # Try different installation methods
-                methods = [
-                    ["playwright", "install", "chromium"],
-                    ["playwright", "install", "chromium", "--with-deps"],
-                    ["python", "-m", "playwright", "install", "chromium"],
-                    ["python", "-m", "playwright", "install", "chromium", "--with-deps"]
-                ]
-                
-                success = False
-                for method in methods:
-                    try:
-                        logger.info(f"Trying installation method: {' '.join(method)}")
-                        result = subprocess.run(
-                            method,
-                            capture_output=True,
-                            text=True
-                        )
-                        logger.info(f"Return code: {result.returncode}")
-                        logger.info(f"Output: {result.stdout}")
-                        if result.returncode == 0:
+                # Check if the browser executable exists
+                if os.path.exists(executable_path):
+                    logger.info("Chromium executable already exists")
+                else:
+                    logger.info("Chromium executable does not exist, installing...")
+                    
+                    # Check for Heroku-specific paths
+                    if is_heroku:
+                        # Check if browser is installed by the buildpack
+                        buildpack_browser_path = "/app/.playwright/chromium-"
+                        potential_paths = list(Path("/app/.playwright").glob("chromium-*"))
+                        if potential_paths:
+                            logger.info(f"Found potential browser paths from buildpack: {potential_paths}")
+                    
+                    # Try different installation methods
+                    methods = [
+                        ["playwright", "install", "chromium"],
+                        ["playwright", "install", "chromium", "--with-deps"],
+                        ["python", "-m", "playwright", "install", "chromium"],
+                        ["python", "-m", "playwright", "install", "chromium", "--with-deps"]
+                    ]
+                    
+                    success = False
+                    for method in methods:
+                        try:
+                            logger.info(f"Trying installation method: {' '.join(method)}")
+                            result = subprocess.run(
+                                method,
+                                capture_output=True,
+                                text=True,
+                                env=dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=browser_cache_dir)
+                            )
+                            logger.info(f"Return code: {result.returncode}")
+                            logger.info(f"Output: {result.stdout}")
+                            logger.info(f"Error: {result.stderr}")
+                            if result.returncode == 0:
+                                success = True
+                                break
+                        except Exception as e:
+                            logger.error(f"Error with method {' '.join(method)}: {e}")
+                    
+                    if not success:
+                        logger.error("All installation methods failed")
+                        
+                        # Check if we're on Heroku and try to use the buildpack browser
+                        if is_heroku and 'chromium' in playwright_browsers.lower():
+                            logger.info("Attempting to use browser installed by buildpack...")
+                            # The browser might still be available through the buildpack
                             success = True
-                            break
-                    except Exception as e:
-                        logger.error(f"Error with method {' '.join(method)}: {e}")
-                
-                if not success:
-                    logger.error("All installation methods failed")
-                    return False
+                        else:
+                            return False
+            except Exception as e:
+                logger.error(f"Error determining browser path: {e}")
+                # Continue anyway, as the browser might be available through other means
         
         # Verify installation by actually launching a browser
         logger.info("Verifying Chromium installation...")
@@ -84,10 +115,16 @@ def setup_playwright():
                         "args": [
                             "--no-sandbox",
                             "--disable-setuid-sandbox",
-                            "--disable-dev-shm-usage"
-                        ]
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",
+                            "--single-process",
+                            f"--user-data-dir={browser_cache_dir}"
+                        ],
+                        "ignore_default_args": ["--disable-extensions"]
                     }
                 
+                # Try to launch the browser
+                logger.info(f"Launching browser with args: {browser_args}")
                 browser = p.chromium.launch(**browser_args)
                 page = browser.new_page()
                 page.goto("https://example.com")
@@ -98,9 +135,39 @@ def setup_playwright():
                 return True
             except Exception as e:
                 logger.error(f"Error testing Chromium: {e}")
+                
+                # If we're on Heroku, we'll log more details but still return True
+                # as the app might still work with other features
+                if is_heroku:
+                    logger.warning("Browser test failed on Heroku, but continuing anyway")
+                    logger.warning("The app will run with limited functionality")
+                    
+                    # List all directories in the Playwright browsers path
+                    try:
+                        playwright_path = Path("/app/.playwright")
+                        if playwright_path.exists():
+                            logger.info(f"Contents of {playwright_path}:")
+                            for item in playwright_path.iterdir():
+                                logger.info(f"  {item}")
+                                if item.is_dir() and item.name.startswith("chromium-"):
+                                    logger.info(f"  Contents of {item}:")
+                                    for subitem in item.iterdir():
+                                        logger.info(f"    {subitem}")
+                    except Exception as dir_error:
+                        logger.error(f"Error listing Playwright directories: {dir_error}")
+                    
+                    # Return True anyway to allow the app to start
+                    return True
                 return False
     except Exception as e:
         logger.error(f"Error setting up Playwright: {e}")
+        
+        # If we're on Heroku, we'll log the error but still return True
+        # to allow the app to start with limited functionality
+        if is_heroku:
+            logger.warning("Setup failed on Heroku, but continuing anyway")
+            logger.warning("The app will run with limited functionality")
+            return True
         return False
 
 if __name__ == "__main__":

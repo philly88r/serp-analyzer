@@ -14,15 +14,43 @@ class SerpAnalyzer:
         Args:
             headless (bool): Whether to run the browser in headless mode
         """
-        # In version 0.4.247, we don't need to pass configuration objects
-        # The configuration is passed directly to the arun method
         self.headless = headless
         
-        # Initialize browser_config as an empty dict since we're passing config directly to arun
-        self.browser_config = {}
+        # Check if we're running on Heroku
+        self.is_heroku = 'DYNO' in os.environ
+        print(f"Running on Heroku: {self.is_heroku}")
         
-        # Create results directory if it doesn't exist
+        # Create a directory for browser cache if it doesn't exist
+        self.browser_cache_dir = os.path.join(os.getcwd(), '.browser_cache')
+        os.makedirs(self.browser_cache_dir, exist_ok=True)
+        
+        # Configure browser options based on environment
+        self.browser_config = self._get_browser_config()
+        
+        # Create necessary directories
         os.makedirs("results", exist_ok=True)
+    
+    def _get_browser_config(self):
+        """
+        Get browser configuration based on the current environment.
+        
+        Returns:
+            dict: Browser configuration options
+        """
+        # Base configuration that works for both local and Heroku environments
+        config = {}
+        
+        # Add Heroku-specific configuration if needed
+        if self.is_heroku:
+            print("Configuring browser for Heroku environment")
+            # Check for PLAYWRIGHT_BUILDPACK_BROWSERS environment variable
+            playwright_browsers = os.environ.get('PLAYWRIGHT_BUILDPACK_BROWSERS', '')
+            print(f"PLAYWRIGHT_BUILDPACK_BROWSERS: {playwright_browsers}")
+            
+            # Set environment variables for Playwright
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
+        
+        return config
         
 
     
@@ -38,44 +66,57 @@ class SerpAnalyzer:
             list: List of dictionaries containing search results
         """
         search_url = f"https://www.google.com/search?q={quote_plus(query)}"
+        print(f"Searching Google for: {query}")
         
-        # Check if we're running on Heroku
-        is_heroku = 'DYNO' in os.environ
-        
-        # Configure browser options for Heroku environment
+        # Configure browser options
         browser_options = {
             "headless": self.headless,
             "verbose": True,
             "cache_mode": "bypass",
             "wait_until": "networkidle",
-            "page_timeout": 30000,
-            "delay_before_return_html": 0.5,
+            "page_timeout": 60000,  # Increased timeout for slower connections
+            "delay_before_return_html": 1.0,  # Increased delay for better rendering
             "word_count_threshold": 100,
             "scan_full_page": True,
-            "scroll_delay": 0.3,
+            "scroll_delay": 0.5,
             "process_iframes": False,
             "remove_overlay_elements": True,
             "magic": True
         }
         
         # Add Heroku-specific options
-        if is_heroku:
-            browser_options["chromium_sandbox"] = False
-            browser_options["browser_args"] = [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
-            ]
+        if self.is_heroku:
+            print("Using Heroku-specific browser options")
+            browser_options.update({
+                "chromium_sandbox": False,
+                "browser_args": [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--single-process",
+                    f"--user-data-dir={self.browser_cache_dir}"
+                ],
+                "ignore_default_args": ["--disable-extensions"],
+                "timeout": 90000  # Extended timeout for Heroku
+            })
+            
+            # Set environment variables for Playwright
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
         
-        async with AsyncWebCrawler(config=self.browser_config) as crawler:
-            print(f"Searching Google for: {query}")
-            # Use the browser_options we defined above
-            browser_options["url"] = search_url
-            result = await crawler.arun(**browser_options)
+        try:
+            async with AsyncWebCrawler(config=self.browser_config) as crawler:
+                # Use the browser_options we defined above
+                browser_options["url"] = search_url
+                print(f"Starting crawler with options: {browser_options}")
+                result = await crawler.arun(**browser_options)
             
             if not result.success:
                 print(f"Error searching Google: {result.error_message}")
                 return []
+        except Exception as e:
+            print(f"Error during search: {str(e)}")
+            return []
             
             # Extract search results using CSS selectors
             # Google search results are typically in divs with class 'g'
@@ -124,17 +165,14 @@ class SerpAnalyzer:
         """
         print(f"Analyzing page: {url}")
         
-        # Check if we're running on Heroku
-        is_heroku = 'DYNO' in os.environ
-        
-        # Configure browser options for Heroku environment
+        # Configure browser options
         browser_options = {
             "url": url,
             "headless": self.headless,
             "verbose": True,
             "cache_mode": "bypass",
             "wait_until": "networkidle",
-            "page_timeout": 30000,
+            "page_timeout": 60000,  # Increased timeout for slower connections
             "delay_before_return_html": 1.0,
             "word_count_threshold": 100,
             "scan_full_page": True,
@@ -145,16 +183,32 @@ class SerpAnalyzer:
         }
         
         # Add Heroku-specific options
-        if is_heroku:
-            browser_options["chromium_sandbox"] = False
-            browser_options["browser_args"] = [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
-            ]
+        if self.is_heroku:
+            print(f"Using Heroku-specific browser options for analyzing {url}")
+            browser_options.update({
+                "chromium_sandbox": False,
+                "browser_args": [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--single-process",
+                    f"--user-data-dir={self.browser_cache_dir}"
+                ],
+                "ignore_default_args": ["--disable-extensions"],
+                "timeout": 90000  # Extended timeout for Heroku
+            })
         
-        async with AsyncWebCrawler(config=self.browser_config) as crawler:
-            result = await crawler.arun(**browser_options)
+        try:
+            async with AsyncWebCrawler(config=self.browser_config) as crawler:
+                result = await crawler.arun(**browser_options)
+        except Exception as e:
+            print(f"Error analyzing page {url}: {str(e)}")
+            return {
+                "url": url,
+                "success": False,
+                "error": str(e)
+            }
             
             if not result.success:
                 print(f"Error analyzing page: {result.error_message}")
