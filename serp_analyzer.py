@@ -18,6 +18,9 @@ class SerpAnalyzer:
         # The configuration is passed directly to the arun method
         self.headless = headless
         
+        # Initialize browser_config as an empty dict since we're passing config directly to arun
+        self.browser_config = {}
+        
         # Create results directory if it doesn't exist
         os.makedirs("results", exist_ok=True)
         
