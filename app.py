@@ -28,6 +28,14 @@ os.makedirs(app.config['ANALYSIS_FOLDER'], exist_ok=True)
 os.makedirs(app.config['BLOG_FOLDER'], exist_ok=True)
 os.makedirs(app.config['HTML_REPORTS_FOLDER'], exist_ok=True)
 
+# Import SerpAnalyzer conditionally to handle case when browser automation is not available
+try:
+    from serp_analyzer import SerpAnalyzer
+    BROWSER_AUTOMATION_AVAILABLE = True
+except ImportError:
+    BROWSER_AUTOMATION_AVAILABLE = False
+    print("Browser automation dependencies not available. Running in limited mode.")
+
 def get_html_report_dir():
     return os.path.join(app.root_path, 'html_reports')
 
@@ -88,7 +96,7 @@ def index():
     # Sort results by timestamp (newest first)
     results.sort(key=lambda x: x['timestamp'], reverse=True)
     
-    return render_template('index.html', results=results)
+    return render_template('index.html', results=results, browser_automation_available=BROWSER_AUTOMATION_AVAILABLE)
 
 @app.route('/search', methods=['POST'])
 def search():
@@ -103,8 +111,12 @@ def search():
         # Clean up old results for this query
         serp_analyzer_working.clean_results_directory(query)
         
+        if not BROWSER_AUTOMATION_AVAILABLE:
+            flash('Browser automation is not available in this deployment. Please use a local deployment with browser automation dependencies installed.', 'danger')
+            return redirect(url_for('index'))
+        
         # Create SERP analyzer
-        analyzer = serp_analyzer_working.SerpAnalyzer(headless=True)
+        analyzer = SerpAnalyzer(headless=True)
         
         # Run search asynchronously
         loop = asyncio.new_event_loop()
