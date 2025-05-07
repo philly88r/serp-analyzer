@@ -50,25 +50,48 @@ if BROWSER_AUTOMATION_AVAILABLE:
         if is_heroku:
             print("Running on Heroku, configuring Playwright...")
             try:
-                # Try to install Playwright browsers
-                print("Installing Playwright browsers...")
-                subprocess.run(["playwright", "install", "chromium"], check=False)
+                # Try to install Playwright browsers if needed
+                print("Checking for Playwright browsers...")
                 
-                # Test if browser works
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-                    page = browser.new_page()
-                    page.goto("https://example.com")
-                    title = page.title()
-                    print(f"Successfully loaded page with title: {title}")
-                    browser.close()
-                    print("Playwright is working correctly!")
+                # First try to access the browser without installing
+                try:
+                    with sync_playwright() as p:
+                        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+                        page = browser.new_page()
+                        page.goto("https://example.com")
+                        title = page.title()
+                        print(f"Successfully loaded page with title: {title}")
+                        browser.close()
+                        print("Playwright is working correctly!")
+                except Exception as browser_error:
+                    print(f"Browser test failed, trying to install: {str(browser_error)}")
+                    # Try to install Playwright browsers
+                    subprocess.run(["playwright", "install", "chromium"], check=False)
+                    
+                    # Test again after installation
+                    try:
+                        with sync_playwright() as p:
+                            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+                            page = browser.new_page()
+                            page.goto("https://example.com")
+                            title = page.title()
+                            print(f"Successfully loaded page with title: {title}")
+                            browser.close()
+                            print("Playwright is working correctly after installation!")
+                    except Exception as retry_error:
+                        print(f"Browser still not working after installation: {str(retry_error)}")
+                        # Continue anyway with limited functionality
+                        print("Continuing with limited functionality")
             except Exception as e:
                 print(f"Error setting up Playwright on Heroku: {str(e)}")
-                BROWSER_AUTOMATION_AVAILABLE = False
+                print("Continuing with limited browser automation functionality")
+                # Don't set BROWSER_AUTOMATION_AVAILABLE to False here
+                # Let the app try to use it and handle failures gracefully
     except Exception as e:
         print(f"Error initializing Playwright: {str(e)}")
-        BROWSER_AUTOMATION_AVAILABLE = False
+        print("Continuing with limited browser automation functionality")
+        # Don't set BROWSER_AUTOMATION_AVAILABLE to False here
+        # Let the app try to use it and handle failures gracefully
 
 def get_html_report_dir():
     return os.path.join(app.root_path, 'html_reports')

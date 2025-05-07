@@ -33,8 +33,23 @@ def setup_playwright():
             from playwright.__version__ import __version__ as playwright_version
             logger.info(f"Playwright is installed (version: {playwright_version})")
         except ImportError:
-            logger.error("Playwright not installed. Please install it with: pip install playwright")
-            return False
+            logger.warning("Playwright not installed. Attempting to install it now...")
+            try:
+                # Try to install playwright
+                logger.info("Installing playwright via pip...")
+                subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+                
+                # Try importing again
+                import playwright
+                from playwright.__version__ import __version__ as playwright_version
+                logger.info(f"Successfully installed Playwright (version: {playwright_version})")
+            except Exception as e:
+                logger.error(f"Failed to install Playwright: {e}")
+                # Continue anyway to allow the app to start with limited functionality
+                if is_heroku:
+                    logger.warning("Continuing despite Playwright installation failure on Heroku")
+                    return True
+                return False
         
         # Create a directory for browser cache if it doesn't exist
         browser_cache_dir = os.path.join(os.getcwd(), '.browser_cache')
