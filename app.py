@@ -28,8 +28,47 @@ os.makedirs(app.config['ANALYSIS_FOLDER'], exist_ok=True)
 os.makedirs(app.config['BLOG_FOLDER'], exist_ok=True)
 os.makedirs(app.config['HTML_REPORTS_FOLDER'], exist_ok=True)
 
-from serp_analyzer import SerpAnalyzer
-import generate_seo_blog
+# Import SerpAnalyzer conditionally to handle case when browser automation is not available
+try:
+    from serp_analyzer import SerpAnalyzer
+    import generate_seo_blog
+    BROWSER_AUTOMATION_AVAILABLE = True
+    print("Browser automation dependencies loaded successfully")
+except Exception as e:
+    BROWSER_AUTOMATION_AVAILABLE = False
+    print(f"Browser automation dependencies not available: {str(e)}. Running in limited mode.")
+    
+# Try to initialize Playwright if it's available
+if BROWSER_AUTOMATION_AVAILABLE:
+    try:
+        import os
+        import subprocess
+        from playwright.sync_api import sync_playwright
+        
+        # Configure Playwright for Heroku
+        is_heroku = 'DYNO' in os.environ
+        if is_heroku:
+            print("Running on Heroku, configuring Playwright...")
+            try:
+                # Try to install Playwright browsers
+                print("Installing Playwright browsers...")
+                subprocess.run(["playwright", "install", "chromium"], check=False)
+                
+                # Test if browser works
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+                    page = browser.new_page()
+                    page.goto("https://example.com")
+                    title = page.title()
+                    print(f"Successfully loaded page with title: {title}")
+                    browser.close()
+                    print("Playwright is working correctly!")
+            except Exception as e:
+                print(f"Error setting up Playwright on Heroku: {str(e)}")
+                BROWSER_AUTOMATION_AVAILABLE = False
+    except Exception as e:
+        print(f"Error initializing Playwright: {str(e)}")
+        BROWSER_AUTOMATION_AVAILABLE = False
 
 def get_html_report_dir():
     return os.path.join(app.root_path, 'html_reports')
@@ -91,7 +130,7 @@ def index():
     # Sort results by timestamp (newest first)
     results.sort(key=lambda x: x['timestamp'], reverse=True)
     
-    return render_template('index.html', results=results)
+    return render_template('index.html', results=results, browser_automation_available=BROWSER_AUTOMATION_AVAILABLE)
 
 @app.route('/search', methods=['POST'])
 def search():
@@ -103,8 +142,13 @@ def search():
         return redirect(url_for('index'))
     
     try:
+        if not BROWSER_AUTOMATION_AVAILABLE:
+            flash('Browser automation is not available in this deployment. Please use a local deployment with browser automation dependencies installed.', 'danger')
+            return redirect(url_for('index'))
+            
         # Clean up old results for this query
-        serp_analyzer_working.clean_results_directory(query)
+        if 'serp_analyzer_working' in globals():
+            serp_analyzer_working.clean_results_directory(query)
         
         # Create necessary directories
         os.makedirs('results', exist_ok=True)

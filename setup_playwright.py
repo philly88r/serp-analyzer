@@ -26,7 +26,7 @@ def setup_playwright():
         # Check if playwright is installed
         try:
             import playwright
-            logger.info(f"Playwright version: {playwright.__version__}")
+            logger.info(f"Playwright is installed")
         except ImportError:
             logger.error("Playwright not installed. Please install it with: pip install playwright")
             return False
