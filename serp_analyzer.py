@@ -242,26 +242,86 @@ class SerpAnalyzer:
             await asyncio.sleep(throttle_time)
             print(f"Request throttling: Waited {throttle_time:.2f}s before making request")
             
-            # Set up headers to look like a real browser
+            # Set up headers to look like a real browser with more human-like parameters
+            selected_user_agent = random.choice(user_agents)
+            
+            # Create more realistic headers based on the selected user agent
+            is_chrome = "Chrome" in selected_user_agent
+            is_firefox = "Firefox" in selected_user_agent
+            is_safari = "Safari" in selected_user_agent and "Chrome" not in selected_user_agent
+            
+            # Generate a realistic Accept header based on browser type
+            if is_chrome or is_safari:
+                accept_header = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            elif is_firefox:
+                accept_header = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            else:
+                accept_header = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            
+            # Generate a realistic Accept-Language header with slight variations
+            languages = ["en-US,en;q=0.9", "en-US,en;q=0.8", "en-GB,en;q=0.9,en-US;q=0.8", "en-CA,en;q=0.9,fr-CA;q=0.8"]
+            
+            # Add cookie consent parameters that regular browsers would have
+            cookies = {}
+            if random.random() > 0.5:  # Randomly include cookies
+                cookies = {
+                    "CONSENT": f"YES+cb.{int(time.time())}-04-p0.en+FX+{random.randint(100, 999)}",
+                    "NID": ''.join(random.choices('0123456789abcdef', k=26)),
+                    "1P_JAR": time.strftime("%Y-%m-%d"),
+                }
+            
             headers = {
-                "User-Agent": random.choice(user_agents),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
+                "User-Agent": selected_user_agent,
+                "Accept": accept_header,
+                "Accept-Language": random.choice(languages),
+                "Accept-Encoding": "gzip, deflate, br",
                 "Referer": "https://www.google.com/",
-                "DNT": "1",
+                "DNT": "1" if random.random() > 0.3 else "0",  # Most browsers have DNT enabled
                 "Connection": "keep-alive",
                 "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-User": "?1",
                 "Cache-Control": "max-age=0"
             }
             
             print(f"Making direct HTTP request to {search_url} via Oxylabs country-specific proxy")
             
-            # Make the request
-            response = requests.get(
-                search_url,
+            # Create a session to maintain cookies and connection
+            session = requests.Session()
+            
+            # Add cookies if we have them
+            if 'cookies' in locals() and cookies:
+                for name, value in cookies.items():
+                    session.cookies.set(name, value, domain=".google.com")
+            
+            # Add random query parameters to make the request look more natural
+            url_params = {
+                "q": query,
+                "gl": "us",
+                "hl": "en",
+                "pws": "0",
+                "safe": "off",
+                "num": str(num_results)
+            }
+            
+            # Add random parameters that real browsers might include
+            if random.random() > 0.5:
+                url_params["source"] = "hp"
+            if random.random() > 0.7:
+                url_params["ei"] = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-', k=22))
+            if random.random() > 0.6:
+                url_params["ved"] = ''.join(random.choices('0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', k=random.randint(40, 60)))
+            
+            # Make the request with the session
+            response = session.get(
+                "https://www.google.com/search",
+                params=url_params,
                 proxies=proxies,
                 headers=headers,
-                timeout=30
+                timeout=30,
+                allow_redirects=True  # Follow redirects
             )
             
             # Check if the request was successful
@@ -271,7 +331,21 @@ class SerpAnalyzer:
                 print(f"HTML preview: {html_content[:500]}...")
                 
                 # Check if we got a CAPTCHA page or any other block indicator
-                if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower() or "sorry..." in html_content.lower():
+                # More comprehensive detection of Google blocks
+                block_indicators = [
+                    "captcha", 
+                    "unusual traffic", 
+                    "sorry...",
+                    "automated queries",
+                    "javascript to continue",
+                    "please click here if you are not redirected",
+                    "our systems have detected",
+                    "enable javascript",
+                    "httpservice/retry"
+                ]
+                
+                is_blocked = any(indicator in html_content.lower() for indicator in block_indicators)
+                if is_blocked:
                     print("DETECTED: Google CAPTCHA or block page in direct HTTP request")
                     
                     # Track the block for adaptive rotation

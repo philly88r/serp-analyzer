@@ -8,8 +8,12 @@ services:
     dockerfilePath: ./Dockerfile
     dockerCommand: gunicorn --bind 0.0.0.0:$PORT app:app
     envVars:
-      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
-        value: 0
       - key: PORT
         value: 8080
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /app/.playwright
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    buildCommand: python -m playwright install chromium --with-deps
+    healthCheckPath: /
     autoDeploy: true

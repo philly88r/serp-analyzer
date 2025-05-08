@@ -33,9 +33,19 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright and browsers
+# Install Playwright and browsers with explicit paths
 RUN pip install --no-cache-dir playwright
-RUN playwright install chromium
+
+# Set environment variables for Playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
+
+# Install Chromium with explicit path and skip browser download check
+RUN mkdir -p /app/.playwright && \
+    python -m playwright install chromium --with-deps && \
+    python -m playwright install-deps chromium
+    
+# Verify browser installation
+RUN ls -la /app/.playwright
 
 # Copy the rest of the application
 COPY . .
