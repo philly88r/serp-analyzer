@@ -17,7 +17,7 @@ services:
       - key: PLAYWRIGHT_CHROMIUM_ARGS
         value: --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage
       - key: RENDER_DISCOVERY_SERVICE
-        value: "1"
+        value: true
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: RENDER
@@ -26,9 +26,7 @@ services:
         value: "1"
       # Oxylabs Configuration
       - key: OXYLABS_USERNAME
-        sync: false
       - key: OXYLABS_PASSWORD
-        sync: false
       - key: PROXY_URL
         value: "us-pr.oxylabs.io:10000"
       - key: SERP_API_URL
@@ -38,7 +36,6 @@ services:
       - key: COUNTRY
         value: "us"
       - key: GEMINI_API_KEY
-        sync: false
     buildCommand: python -m playwright install chromium && python -m playwright install-deps chromium
     healthCheckPath: /
     autoDeploy: true
