@@ -54,6 +54,33 @@ class SerpAnalyzer:
         
         # Create necessary directories
         os.makedirs("results", exist_ok=True)
+        
+        # Initialize proxy rotation variables
+        self._last_state_index = 0
+        
+        # Initialize proxy state tracking
+        us_states = [
+            "us_florida", "us_california", "us_massachusetts", "us_north_carolina", 
+            "us_south_carolina", "us_nevada", "us_new_york", "us_texas", 
+            "us_washington", "us_illinois", "us_arizona", "us_colorado",
+            "us_georgia", "us_michigan", "us_ohio", "us_pennsylvania"
+        ]
+        
+        # Initialize proxy state tracking dictionary
+        self._proxy_state = {
+            'last_state': None,
+            'used_states': set(),
+            'state_blocks': {state: 0 for state in us_states},
+            'state_delays': {state: 1 for state in us_states},  # Default 1 second delay
+            'circuit_breaker': {state: {'is_open': False, 'reset_timeout': 300, 'last_attempt': time.time()} for state in us_states},
+            'rotation_interval': 120,  # 2 minutes default
+            'last_rotation_time': time.time(),
+            'last_rotation': time.time(),  # For compatibility with existing code
+            'consecutive_blocks': 0,
+            'global_backoff': 1,  # Global backoff multiplier
+            'block_count': 0,  # Count of recent blocks
+            'last_block_time': time.time()  # Time of the last block
+        }
     
     def _get_browser_config(self):
         """
