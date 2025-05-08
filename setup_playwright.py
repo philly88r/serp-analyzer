@@ -160,6 +160,11 @@ def verify_chromium_installation():
         from playwright.sync_api import sync_playwright
         
         with sync_playwright() as p:
+            # Create browser cache directory if it doesn't exist
+            browser_cache_dir = os.path.join(os.getcwd(), '.browser_cache')
+            os.makedirs(browser_cache_dir, exist_ok=True)
+            
+            # Define browser launch arguments without user_data_dir
             browser_args = {
                 "executable_path": None,  # Let Playwright find it
                 "args": [
@@ -167,8 +172,7 @@ def verify_chromium_installation():
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
-                    "--single-process",
-                    f"--user-data-dir={os.getcwd()}/.browser_cache"
+                    "--single-process"
                 ],
                 "ignore_default_args": ["--disable-extensions"],
                 "timeout": 60000  # Increased timeout
@@ -182,12 +186,17 @@ def verify_chromium_installation():
             print_message(f"Attempting to launch browser with args: {browser_args}")
             
             try:
-                browser = p.chromium.launch(**browser_args)
-                page = browser.new_page()
+                # Use launch_persistent_context instead of launch to properly handle user_data_dir
+                print_message(f"Using persistent context with user_data_dir: {browser_cache_dir}")
+                browser_context = p.chromium.launch_persistent_context(
+                    user_data_dir=browser_cache_dir,
+                    **browser_args
+                )
+                page = browser_context.new_page()
                 page.goto("https://example.com")
                 title = page.title()
                 print_message(f"Successfully loaded page with title: {title}")
-                browser.close()
+                browser_context.close()
                 print_message("Chromium verification successful!")
             except Exception as e:
                 print_error(f"Error during browser launch or page navigation: {e}")

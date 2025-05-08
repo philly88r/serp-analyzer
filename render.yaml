@@ -3,15 +3,21 @@ services:
   - type: web
     name: serp-analyzer
     env: docker
+    region: ohio
+    plan: free
     repo: https://github.com/philly88r/serp-analyzer.git
-    branch: master
+    branch: main
     dockerfilePath: ./Dockerfile
-    dockerCommand: bash ./start.sh
+    dockerCommand: ./start.sh
     envVars:
       - key: PORT
         value: 8080
       - key: PLAYWRIGHT_BROWSERS_PATH
-        value: /app/.playwright
+        value: /opt/render/.playwright
+      - key: PLAYWRIGHT_CHROMIUM_ARGS
+        value: --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage
+      - key: RENDER_DISCOVERY_SERVICE
+        value: "1"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: RENDER
@@ -20,9 +26,9 @@ services:
         value: "1"
       # Oxylabs Configuration
       - key: OXYLABS_USERNAME
-        value: "customer-pematthews41_5eo28"
+        sync: false
       - key: OXYLABS_PASSWORD
-        value: "Yitbos88++88"
+        sync: false
       - key: PROXY_URL
         value: "us-pr.oxylabs.io:10000"
       - key: SERP_API_URL
@@ -32,7 +38,7 @@ services:
       - key: COUNTRY
         value: "us"
       - key: GEMINI_API_KEY
-        value: "AIzaSyBl6LgSol_l_ELLHhd5YX90VeXEwdt3xPU"
-    buildCommand: python -m playwright install chromium --with-deps && python -m playwright install-deps chromium
+        sync: false
+    buildCommand: python -m playwright install chromium && python -m playwright install-deps chromium
     healthCheckPath: /
     autoDeploy: true
