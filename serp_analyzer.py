@@ -28,8 +28,21 @@ try:
     )
     OXYLABS_CONFIGURED = True
 except (ImportError, AttributeError):
-    print("Oxylabs configuration not found or incomplete. Will use direct requests.")
-    OXYLABS_CONFIGURED = False
+    # Try to get configuration from environment variables
+    OXYLABS_USERNAME = os.environ.get('OXYLABS_USERNAME')
+    OXYLABS_PASSWORD = os.environ.get('OXYLABS_PASSWORD')
+    PROXY_URL = os.environ.get('PROXY_URL')
+    SERP_API_URL = os.environ.get('SERP_API_URL')
+    PROXY_TYPE = os.environ.get('PROXY_TYPE')
+    COUNTRY = os.environ.get('COUNTRY')
+    
+    # Check if all required variables are set
+    if all([OXYLABS_USERNAME, OXYLABS_PASSWORD, PROXY_URL, SERP_API_URL, PROXY_TYPE, COUNTRY]):
+        print("Using Oxylabs configuration from environment variables.")
+        OXYLABS_CONFIGURED = True
+    else:
+        print("Oxylabs configuration not found or incomplete. Will use direct requests.")
+        OXYLABS_CONFIGURED = False
 
 class SerpAnalyzer:
     def __init__(self, headless=False):

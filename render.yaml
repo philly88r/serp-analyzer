@@ -18,6 +18,19 @@ services:
         value: "true"
       - key: PLAYWRIGHT_SKIP_VALIDATION
         value: "1"
+      # Oxylabs Configuration
+      - key: OXYLABS_USERNAME
+        value: "customer-pematthews41_5eo28"
+      - key: OXYLABS_PASSWORD
+        value: "Yitbos88++88"
+      - key: PROXY_URL
+        value: "us-pr.oxylabs.io:10000"
+      - key: SERP_API_URL
+        value: "https://realtime.oxylabs.io/v1/queries/google/search"
+      - key: PROXY_TYPE
+        value: "residential"
+      - key: COUNTRY
+        value: "us"
     buildCommand: python -m playwright install chromium --with-deps && python -m playwright install-deps chromium
     healthCheckPath: /
     autoDeploy: true
