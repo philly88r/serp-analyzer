@@ -875,7 +875,7 @@ class SerpAnalyzer:
             }
             
             return analysis_result
-        
+            
         except Exception as e:
             print(f"Error analyzing page {url}: {str(e)}")
             return default_result
@@ -934,15 +934,12 @@ class SerpAnalyzer:
                 
                 analyzed_results.append(full_result)
             except Exception as e:
-                error_url = result.get('url', 'N/A')  # Safer dictionary access
-                error_msg = str(e)
-                full_error_message = f"Error analyzing page {error_url}: {error_msg}"
-                print(full_error_message)
+                print(f"Error analyzing page {result['url']}: {str(e)}")
                 # Add the result with error information
                 error_result = {
                     **result,
                     "success": False,
-                    "error": full_error_message
+                    "error": f"Error during analysis: {str(e)}"
                 }
                 analyzed_results.append(error_result)
         

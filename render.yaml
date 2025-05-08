@@ -6,17 +6,10 @@ services:
     repo: https://github.com/philly88r/serp-analyzer.git
     branch: main
     dockerfilePath: ./Dockerfile
-    # Run setup_playwright.py before starting the application
-    dockerCommand: python setup_playwright.py && gunicorn --bind 0.0.0.0:$PORT --timeout 300 app:app
+    dockerCommand: gunicorn --bind 0.0.0.0:$PORT app:app
     envVars:
       - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
         value: 0
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: /opt/render/.playwright
-      - key: PLAYWRIGHT_CHROMIUM_ARGS
-        value: --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage
-      - key: RENDER
-        value: true
       - key: PORT
         value: 8080
     autoDeploy: true
