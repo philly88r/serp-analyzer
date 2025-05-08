@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libatspi2.0-0 \
     fonts-liberation \
+    wget \
+    gnupg \
+    ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -33,9 +36,18 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright and browsers
+# Install Playwright and browsers with proper permissions
 RUN pip install --no-cache-dir playwright
-RUN playwright install chromium
+
+# Create the directory for Playwright browsers
+RUN mkdir -p /opt/render/.playwright
+
+# Install Chromium browser and ensure proper permissions
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/render/.playwright playwright install chromium --with-deps
+RUN chmod -R 777 /opt/render/.playwright
+
+# Copy the setup_playwright.py script first
+COPY setup_playwright.py .
 
 # Copy the rest of the application
 COPY . .
@@ -44,4 +56,5 @@ COPY . .
 EXPOSE 8080
 
 # Command to run the application with increased timeout (300 seconds = 5 minutes)
-CMD gunicorn --bind 0.0.0.0:8080 --timeout 300 --workers 2 app:app
+# Note: The actual command will be overridden by render.yaml
+CMD python setup_playwright.py && gunicorn --bind 0.0.0.0:8080 --timeout 300 --workers 2 app:app

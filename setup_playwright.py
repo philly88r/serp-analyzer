@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import logging
+import platform
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
@@ -16,8 +17,15 @@ def print_error(message):
 def setup_playwright():
     print_message("Starting Playwright setup...")
     is_heroku = 'DYNO' in os.environ
+    is_render = 'RENDER' in os.environ
     # Default to '0' if the env var is not set, so skip_browser_download becomes False
     skip_browser_download = os.environ.get('PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD', '0') == '1'
+
+    # Print all environment variables for debugging
+    print_message("Environment variables:")
+    for key, value in os.environ.items():
+        if key.startswith('PLAYWRIGHT') or key in ['RENDER', 'DYNO', 'PATH']:
+            print_message(f"  {key}: {value}")
 
     if is_heroku:
         print_message("Running on Heroku.")
@@ -29,6 +37,24 @@ def setup_playwright():
             # Heroku buildpacks typically install browsers to /app/.playwright
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
             print_message(f"PLAYWRIGHT_BROWSERS_PATH defaulted to /app/.playwright for Heroku.")
+    
+    elif is_render:
+        print_message("Running on Render.com.")
+        browsers_path = os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
+        if browsers_path:
+            print_message(f"PLAYWRIGHT_BROWSERS_PATH is set to: {browsers_path}")
+        else:
+            # Default path for Render.com Docker deployments
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/.playwright'
+            print_message(f"PLAYWRIGHT_BROWSERS_PATH defaulted to /opt/render/.playwright for Render.com.")
+        
+        # Set additional environment variables for Render.com
+        os.environ['PLAYWRIGHT_CHROMIUM_ARGS'] = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage'
+        print_message("Set PLAYWRIGHT_CHROMIUM_ARGS for Render.com environment.")
+        
+        # Ensure we're using the correct browser executable path
+        os.environ['PLAYWRIGHT_BROWSERS_EXECUTABLE_PATH'] = '/opt/render/.playwright/chromium/chrome-linux/chrome'
+        print_message("Set PLAYWRIGHT_BROWSERS_EXECUTABLE_PATH for Render.com environment.")
 
     if skip_browser_download:
         print_message("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is '1'. Skipping browser installation and verification.")
@@ -104,9 +130,15 @@ def install_playwright_browsers(browser_name="chromium"):
 def verify_chromium_installation():
     print_message("Verifying Chromium installation...")
     try:
+        # Import here to avoid issues if the module is not installed
+        from playwright.sync_api import sync_playwright
+        
         with sync_playwright() as p:
+            # Check if we're on Render.com
+            is_render = 'RENDER' in os.environ
+            
+            # Set up browser arguments
             browser_args = {
-                "executable_path": None, # Let Playwright find it
                 "args": [
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
@@ -118,16 +150,31 @@ def verify_chromium_installation():
                 "ignore_default_args": ["--disable-extensions"],
                 "timeout": 60000  # Increased timeout
             }
+            
+            # If on Render.com, use the executable path from environment variable
+            if is_render and os.environ.get('PLAYWRIGHT_BROWSERS_EXECUTABLE_PATH'):
+                executable_path = os.environ.get('PLAYWRIGHT_BROWSERS_EXECUTABLE_PATH')
+                print_message(f"Using executable path from environment: {executable_path}")
+                browser_args["executable_path"] = executable_path
+            
+            # Always use headless mode in CI/CD environments
             if platform.system() == "Linux" and os.environ.get("DISPLAY") is None:
                 print_message("Linux environment with no DISPLAY detected, ensuring headless for verification.")
-                # browser_args["headless"] = True # Playwright's chromium is headless by default
-
+                browser_args["headless"] = True
+            
+            # Print the browser launch arguments for debugging
             print_message(f"Attempting to launch browser with args: {browser_args}")
+            
+            # Launch the browser with the configured arguments
             browser = p.chromium.launch(**browser_args)
+            
+            # Create a page and navigate to a test URL
             page = browser.new_page()
             page.goto("https://example.com")
             title = page.title()
             print_message(f"Successfully loaded page with title: {title}")
+            
+            # Close the browser
             browser.close()
             print_message("Chromium verification successful!")
     except Exception as e:
