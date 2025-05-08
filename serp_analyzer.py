@@ -321,18 +321,34 @@ class SerpAnalyzer:
         """
         print(f"Analyzing page: {url}")
         
-        # Configure browser options
+        # Initialize default result structure with empty values
+        default_result = {
+            "url": url,
+            "success": False,
+            "title": "",
+            "meta_description": "",
+            "meta_keywords": "",
+            "h1_tags": [],
+            "h2_tags": [],
+            "h3_tags": [],
+            "internal_links": [],
+            "external_links": [],
+            "images": [],
+            "word_count": 0,
+            "content_preview": ""
+        }
+        
+        # Configure browser options with longer timeouts for Render.com
         browser_options = {
             "url": url,
             "headless": self.headless,
-            # Remove verbose from here as it's likely included in the config
             "cache_mode": "bypass",
             "wait_until": "networkidle",
-            "page_timeout": 60000,  # Increased timeout for slower connections
-            "delay_before_return_html": 1.0,
+            "page_timeout": 90000,  # Increased timeout for slower connections
+            "delay_before_return_html": 2.0,  # Increased delay for better rendering
             "word_count_threshold": 100,
             "scan_full_page": True,
-            "scroll_delay": 0.5,
+            "scroll_delay": 0.8,
             "process_iframes": False,
             "remove_overlay_elements": True,
             "magic": True
@@ -359,96 +375,120 @@ class SerpAnalyzer:
             # Create a new crawler with no config to avoid the verbose parameter conflict
             async with AsyncWebCrawler() as crawler:
                 result = await crawler.arun(**browser_options)
+                
+                # Check if the result was successful
+                if not hasattr(result, 'success') or not result.success:
+                    error_message = getattr(result, 'error_message', 'Unknown error')
+                    print(f"Error analyzing page: {error_message}")
+                    default_result["error"] = error_message
+                    return default_result
+                
+                # Check if HTML content exists
+                if not hasattr(result, 'html') or not result.html:
+                    print("Could not find HTML content in the result object")
+                    default_result["error"] = "No HTML content found"
+                    return default_result
+                
+                # Parse the HTML with BeautifulSoup
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(result.html, 'html.parser')
+                
+                # Basic SEO data - with error handling for each step
+                try:
+                    default_result["title"] = soup.title.get_text() if soup.title else ""
+                except Exception as e:
+                    print(f"Error extracting title: {str(e)}")
+                
+                # Extract meta tags
+                try:
+                    for meta in soup.find_all("meta"):
+                        if meta.get("name", "").lower() == "description":
+                            default_result["meta_description"] = meta.get("content", "")
+                        elif meta.get("name", "").lower() == "keywords":
+                            default_result["meta_keywords"] = meta.get("content", "")
+                except Exception as e:
+                    print(f"Error extracting meta tags: {str(e)}")
+                
+                # Extract headings
+                try:
+                    default_result["h1_tags"] = [h1.get_text().strip() for h1 in soup.find_all("h1")]
+                    default_result["h2_tags"] = [h2.get_text().strip() for h2 in soup.find_all("h2")]
+                    default_result["h3_tags"] = [h3.get_text().strip() for h3 in soup.find_all("h3")]
+                except Exception as e:
+                    print(f"Error extracting headings: {str(e)}")
+                
+                # Extract links
+                try:
+                    internal_links = []
+                    external_links = []
+                    base_domain = url.split("//")[-1].split("/")[0]
+                    
+                    for link in soup.find_all("a", href=True):
+                        href = link["href"]
+                        if href.startswith("#") or not href or href == "/":
+                            continue
+                        
+                        # Normalize URL
+                        if href.startswith("/"):
+                            full_url = f"{url.split('//')[0]}//{base_domain}{href}"
+                            internal_links.append(full_url)
+                        elif base_domain in href:
+                            internal_links.append(href)
+                        elif href.startswith("http"):
+                            external_links.append(href)
+                    
+                    default_result["internal_links"] = internal_links
+                    default_result["external_links"] = external_links
+                except Exception as e:
+                    print(f"Error extracting links: {str(e)}")
+                
+                # Extract images
+                try:
+                    images = []
+                    for img in soup.find_all("img", src=True):
+                        try:
+                            src = img["src"]
+                            alt = img.get("alt", "")
+                            
+                            # Normalize image URL
+                            if src.startswith("/"):
+                                src = f"{url.split('//')[0]}//{base_domain}{src}"
+                            elif not src.startswith("http"):
+                                src = f"{url.rstrip('/')}/{src.lstrip('/')}"
+                            
+                            images.append({
+                                "src": src,
+                                "alt": alt
+                            })
+                        except Exception as img_error:
+                            print(f"Error processing image: {str(img_error)}")
+                            continue
+                    
+                    default_result["images"] = images
+                except Exception as e:
+                    print(f"Error extracting images: {str(e)}")
+                
+                # Page content analysis
+                try:
+                    # Extract text from the soup object
+                    content_text = soup.get_text()
+                    default_result["word_count"] = len(content_text.split())
+                    
+                    # Get a preview of the content
+                    content_preview = " ".join(content_text.split()[:100])
+                    default_result["content_preview"] = content_preview
+                except Exception as e:
+                    print(f"Error analyzing content: {str(e)}")
+                
+                # Mark as successful
+                default_result["success"] = True
+                
+                return default_result
+                
         except Exception as e:
             print(f"Error analyzing page {url}: {str(e)}")
-            return {
-                "url": url,
-                "success": False,
-                "error": str(e)
-            }
-            
-            # Check if the result was successful
-            if hasattr(result, 'success') and not result.success:
-                error_message = getattr(result, 'error_message', 'Unknown error')
-                print(f"Error analyzing page: {error_message}")
-                return {
-                    "url": url,
-                    "success": False,
-                    "error": error_message
-                }
-            
-            # Extract SEO data
-            # The Crawl4AI library has changed, so we need to parse the HTML directly
-            from bs4 import BeautifulSoup
-            
-            if not hasattr(result, 'html'):
-                print("Could not find HTML content in the result object")
-                return {
-                    "url": url,
-                    "success": False,
-                    "error": "Could not find HTML content in the result object"
-                }
-                
-            # Parse the HTML with BeautifulSoup
-            soup = BeautifulSoup(result.html, 'html.parser')
-            
-            # Basic SEO data
-            title = soup.title.get_text() if soup.title else "" 
-            meta_description = ""
-            meta_keywords = ""
-            
-            # Extract meta tags
-            for meta in soup.find_all("meta"):
-                if meta.get("name", "").lower() == "description":
-                    meta_description = meta.get("content", "")
-                elif meta.get("name", "").lower() == "keywords":
-                    meta_keywords = meta.get("content", "")
-            
-            # Extract headings
-            h1_tags = [h1.get_text().strip() for h1 in soup.find_all("h1")]
-            h2_tags = [h2.get_text().strip() for h2 in soup.find_all("h2")]
-            h3_tags = [h3.get_text().strip() for h3 in soup.find_all("h3")]
-            
-            # Extract links
-            internal_links = []
-            external_links = []
-            base_domain = url.split("//")[-1].split("/")[0]
-            
-            for link in soup.find_all("a", href=True):
-                href = link["href"]
-                if href.startswith("#") or not href or href == "/":
-                    continue
-                
-                # Normalize URL
-                if href.startswith("/"):
-                    full_url = f"{url.split('//')[0]}//{base_domain}{href}"
-                    internal_links.append(full_url)
-                elif base_domain in href:
-                    internal_links.append(href)
-                elif href.startswith("http"):
-                    external_links.append(href)
-            
-            # Extract images
-            images = []
-            for img in soup.find_all("img", src=True):
-                src = img["src"]
-                alt = img.get("alt", "")
-                
-                # Normalize image URL
-                if src.startswith("/"):
-                    src = f"{url.split('//')[0]}//{base_domain}{src}"
-                elif not src.startswith("http"):
-                    src = f"{url.rstrip('/')}/{src.lstrip('/')}"
-                
-                images.append({
-                    "src": src,
-                    "alt": alt
-                })
-            
-            # Page content analysis
-            # Extract text from the soup object since the Crawl4AI API has changed
-            content_text = soup.get_text()
-            word_count = len(content_text.split())
+            default_result["error"] = str(e)
+            return default_result
             
             # Get clean markdown content
             # Check if the result has a markdown attribute
