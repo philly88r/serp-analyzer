@@ -419,7 +419,7 @@ class SerpAnalyzer:
                     return []
                 
                 # Process the HTML to extract search results
-                search_results = self._process_google_html(html_content, query, num_results)
+                search_results = await self._process_google_html(html_content, query, num_results)
                 
                 # If we got results, reset failure count for this state
                 if search_results and len(search_results) > 0:
@@ -512,6 +512,90 @@ class SerpAnalyzer:
         print(f"Found {len(unique_results)} unique URLs")
         return unique_results[:num_results]  # Return only the requested number of results
         
+    async def _process_google_html(self, html, query, num_results=6):
+        """
+        Process Google HTML to extract search results
+        
+        Args:
+            html (str): HTML content from Google search
+            query (str): The search query
+            num_results (int): Number of results to extract
+            
+        Returns:
+            list: List of dictionaries containing search results
+        """
+        search_results = []
+        
+        try:
+            # Parse the HTML with BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Try multiple selectors for Google search results
+            selectors = ["div.g", "div.Gx5Zad", "div.tF2Cxc", "div.yuRUbf", "div[jscontroller]", "div.rc"]
+            result_elements = []
+            
+            for selector in selectors:
+                elements = soup.select(selector)
+                if elements:
+                    print(f"Found {len(elements)} results with selector: {selector}")
+                    result_elements = elements
+                    break
+            
+            if not result_elements:
+                print("No results found with standard selectors, trying alternative methods")
+                # Try a more generic approach
+                result_elements = soup.select("div > a")
+                if result_elements:
+                    print(f"Found {len(result_elements)} results with generic selector")
+            
+            # Process each result element
+            for element in result_elements:
+                try:
+                    # Extract the title and URL
+                    title_element = element.select_one("h3") or element.select_one("a h3") or element.select_one("a")
+                    title = title_element.get_text().strip() if title_element else "Unknown Title"
+                    
+                    # Find the URL - try multiple approaches
+                    url_element = element.select_one("a") or element.select_one("div.yuRUbf a") or element.select_one("div.rc a")
+                    url = url_element.get("href") if url_element else ""
+                    
+                    # Clean the URL (remove tracking parameters)
+                    if url.startswith("/url?q="):
+                        url = url.split("/url?q=")[1].split("&")[0]
+                    
+                    # Skip if URL is not valid
+                    if not url or not url.startswith("http"):
+                        continue
+                    
+                    # Extract the snippet
+                    snippet_element = element.select_one("div.VwiC3b") or element.select_one("span.st") or element.select_one("div.s")
+                    snippet = snippet_element.get_text().strip() if snippet_element else ""
+                    
+                    # Add this result
+                    search_results.append({
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet
+                    })
+                except Exception as e:
+                    print(f"Error extracting result: {str(e)}")
+                    continue
+            
+            # Remove duplicates based on URL
+            unique_urls = set()
+            unique_results = []
+            for result in search_results:
+                if result["url"] not in unique_urls:
+                    unique_urls.add(result["url"])
+                    unique_results.append(result)
+            
+            print(f"Found {len(unique_results)} unique URLs")
+            return unique_results[:num_results]  # Return only the requested number of results
+            
+        except Exception as e:
+            print(f"Error processing Google HTML: {str(e)}")
+            return []
+    
     async def _extract_results_with_regex(self, html, num_results=6):
         """
         Extract search results using regex patterns when BeautifulSoup selectors fail
@@ -736,7 +820,7 @@ class SerpAnalyzer:
                 
                 # Process the HTML
                 html_content = result.html
-                search_results = self._process_google_html(html_content, query, num_results)
+                search_results = await self._process_google_html(html_content, query, num_results)
                 
                 # If we got results, reset failure count
                 if search_results and len(search_results) > 0:
@@ -788,7 +872,7 @@ class SerpAnalyzer:
                 
                 # Process the HTML
                 html_content = result.html
-                search_results = self._process_google_html(html_content, query, num_results)
+                search_results = await self._process_google_html(html_content, query, num_results)
                 
                 if search_results and len(search_results) > 0:
                     return search_results
