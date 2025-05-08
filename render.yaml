@@ -1,0 +1,15 @@
+services:
+  # A Docker web service
+  - type: web
+    name: serp-analyzer
+    env: docker
+    repo: https://github.com/philly88r/serp-analyzer.git
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerCommand: gunicorn --bind 0.0.0.0:$PORT app:app
+    envVars:
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: 0
+      - key: PORT
+        value: 8080
+    autoDeploy: true
