@@ -1,5 +1,5 @@
 services:
-  # A Docker web service
+  # A Docker web service - Updated for deployment
   - type: web
     name: serp-analyzer
     env: docker
