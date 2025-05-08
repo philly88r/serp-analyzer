@@ -73,5 +73,5 @@ COPY . .
 # Expose the port the app runs on
 EXPOSE 8080
 
-# Command to run the application with increased timeout (300 seconds = 5 minutes)
-CMD gunicorn --bind 0.0.0.0:8080 --timeout 300 --workers 2 app:app
+# Command to run the application using the start.sh script
+CMD ["bash", "./start.sh"]
