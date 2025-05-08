@@ -1,6 +1,6 @@
 # SERP Analyzer
 
-A powerful tool for analyzing Google search results using Crawl4AI. This tool fetches the top search results for a query, extracts SEO data, and analyzes page content.
+A powerful tool for analyzing Google search results using Crawl4AI and Oxylabs integration. This tool fetches the top search results for a query, extracts SEO data, and analyzes page content while bypassing anti-bot measures.
 
 ## Features
 

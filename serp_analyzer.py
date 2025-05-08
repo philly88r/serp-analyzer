@@ -692,6 +692,15 @@ class SerpAnalyzer:
         """
         print(f"Analyzing page: {url}")
         
+        # Check if this is a known problematic site that might cause timeouts
+        problematic_domains = ["reddit.com", "twitter.com", "facebook.com", "instagram.com"]
+        if any(domain in url.lower() for domain in problematic_domains):
+            print(f"Warning: {url} is a potentially slow site that might cause timeouts")
+            # Set a shorter timeout for problematic sites
+            page_timeout = 45000  # 45 seconds
+        else:
+            page_timeout = 90000  # 90 seconds for normal sites
+        
         # Initialize default result structure with empty values
         default_result = {
             "url": url,
@@ -715,19 +724,18 @@ class SerpAnalyzer:
             "headless": self.headless,
             "cache_mode": "bypass",
             "wait_until": "networkidle",
-            "page_timeout": 90000,  # Increased timeout for slower connections
-            "delay_before_return_html": 2.0,  # Increased delay for better rendering
+            "page_timeout": page_timeout,
+            "delay_before_return_html": 2.0,
             "word_count_threshold": 100,
             "scan_full_page": True,
-            "scroll_delay": 0.8,
+            "scroll_delay": 1.0,
             "process_iframes": False,
             "remove_overlay_elements": True,
             "magic": True
         }
         
-        # Add Heroku-specific options
+        # Add Heroku-specific options if needed
         if self.is_heroku:
-            print(f"Using Heroku-specific browser options for analyzing {url}")
             browser_options.update({
                 "chromium_sandbox": False,
                 "browser_args": [
@@ -738,135 +746,190 @@ class SerpAnalyzer:
                     "--single-process",
                     f"--user-data-dir={self.browser_cache_dir}"
                 ],
-                "ignore_default_args": ["--disable-extensions"],
-                "timeout": 90000  # Extended timeout for Heroku
+                "ignore_default_args": ["--disable-extensions"]
             })
         
+        # Create a polling task with timeout
         try:
-            # Create a new crawler with no config to avoid the verbose parameter conflict
-            async with AsyncWebCrawler() as crawler:
-                result = await crawler.arun(**browser_options)
-                
-                # Check if the result was successful
-                if not hasattr(result, 'success') or not result.success:
-                    error_message = getattr(result, 'error_message', 'Unknown error')
-                    print(f"Error analyzing page: {error_message}")
-                    default_result["error"] = error_message
-                    return default_result
-                
-                # Check if HTML content exists
-                if not hasattr(result, 'html') or not result.html:
-                    print("Could not find HTML content in the result object")
-                    default_result["error"] = "No HTML content found"
-                    return default_result
-                
-                # Parse the HTML with BeautifulSoup
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(result.html, 'html.parser')
-                
-                # Basic SEO data - with error handling for each step
+            # Set up a timeout for the entire analysis process
+            analysis_timeout = 120  # 2 minutes max for the entire analysis
+            
+            # Start time for polling
+            start_time = time.time()
+            
+            # Create a flag to track if the analysis is complete
+            analysis_complete = False
+            
+            # Create a variable to store the result
+            analysis_result = default_result
+            
+            # Run the analysis with polling
+            print(f"Starting analysis of {url} with polling (timeout: {analysis_timeout}s)")
+            
+            while not analysis_complete and (time.time() - start_time) < analysis_timeout:
                 try:
-                    default_result["title"] = soup.title.get_text() if soup.title else ""
-                except Exception as e:
-                    print(f"Error extracting title: {str(e)}")
-                
-                # Extract meta tags
-                try:
-                    for meta in soup.find_all("meta"):
-                        if meta.get("name", "").lower() == "description":
-                            default_result["meta_description"] = meta.get("content", "")
-                        elif meta.get("name", "").lower() == "keywords":
-                            default_result["meta_keywords"] = meta.get("content", "")
-                except Exception as e:
-                    print(f"Error extracting meta tags: {str(e)}")
-                
-                # Extract headings
-                try:
-                    default_result["h1_tags"] = [h1.get_text().strip() for h1 in soup.find_all("h1")]
-                    default_result["h2_tags"] = [h2.get_text().strip() for h2 in soup.find_all("h2")]
-                    default_result["h3_tags"] = [h3.get_text().strip() for h3 in soup.find_all("h3")]
-                except Exception as e:
-                    print(f"Error extracting headings: {str(e)}")
-                
-                # Extract links
-                try:
+                    # Create a new crawler for this page
+                    async with AsyncWebCrawler() as crawler:
+                        print(f"Fetching page: {url}")
+                        result = await crawler.arun(**browser_options)
+                    
+                    if not result.success:
+                        print(f"Error analyzing page: {result.error_message}")
+                        # Don't retry on error, just return default result
+                        return default_result
+                    
+                    # Extract HTML content
+                    html = result.html
+                    
+                    # Parse the HTML with BeautifulSoup
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Extract page title
+                    title = soup.title.text.strip() if soup.title else ""
+                    
+                    # Extract meta description
+                    meta_description = ""
+                    meta_desc_tag = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
+                    if meta_desc_tag and meta_desc_tag.get('content'):
+                        meta_description = meta_desc_tag['content']
+                    
+                    # Extract meta keywords
+                    meta_keywords = ""
+                    meta_keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
+                    if meta_keywords_tag and meta_keywords_tag.get('content'):
+                        meta_keywords = meta_keywords_tag['content']
+                    
+                    # Extract heading tags
+                    h1_tags = [h1.text.strip() for h1 in soup.find_all('h1') if h1.text.strip()]
+                    h2_tags = [h2.text.strip() for h2 in soup.find_all('h2') if h2.text.strip()]
+                    h3_tags = [h3.text.strip() for h3 in soup.find_all('h3') if h3.text.strip()]
+                    
+                    # Extract links
                     internal_links = []
                     external_links = []
-                    base_domain = url.split("//")[-1].split("/")[0]
                     
-                    for link in soup.find_all("a", href=True):
-                        href = link["href"]
-                        if href.startswith("#") or not href or href == "/":
+                    # Get the domain of the current page
+                    from urllib.parse import urlparse
+                    current_domain = urlparse(url).netloc
+                    
+                    for link in soup.find_all('a', href=True):
+                        href = link['href']
+                        
+                        # Skip empty, javascript, or anchor links
+                        if not href or href.startswith('javascript:') or href.startswith('#'):
                             continue
                         
-                        # Normalize URL
-                        if href.startswith("/"):
-                            full_url = f"{url.split('//')[0]}//{base_domain}{href}"
-                            internal_links.append(full_url)
-                        elif base_domain in href:
-                            internal_links.append(href)
-                        elif href.startswith("http"):
-                            external_links.append(href)
+                        # Make relative URLs absolute
+                        if href.startswith('/'):
+                            href = f"{urlparse(url).scheme}://{current_domain}{href}"
+                        elif not href.startswith('http'):
+                            href = f"{url.rstrip('/')}/{href.lstrip('/')}"
+                        
+                        # Check if the link is internal or external
+                        link_domain = urlparse(href).netloc
+                        link_text = link.text.strip()
+                        
+                        link_info = {
+                            'url': href,
+                            'text': link_text if link_text else href
+                        }
+                        
+                        if link_domain == current_domain or not link_domain:
+                            internal_links.append(link_info)
+                        else:
+                            external_links.append(link_info)
                     
-                    default_result["internal_links"] = internal_links
-                    default_result["external_links"] = external_links
-                except Exception as e:
-                    print(f"Error extracting links: {str(e)}")
-                
-                # Extract images
-                try:
+                    # Extract images
                     images = []
-                    for img in soup.find_all("img", src=True):
-                        try:
-                            src = img["src"]
-                            alt = img.get("alt", "")
-                            
-                            # Normalize image URL
-                            if src.startswith("/"):
-                                src = f"{url.split('//')[0]}//{base_domain}{src}"
-                            elif not src.startswith("http"):
-                                src = f"{url.rstrip('/')}/{src.lstrip('/')}"
-                            
-                            images.append({
-                                "src": src,
-                                "alt": alt
-                            })
-                        except Exception as img_error:
-                            print(f"Error processing image: {str(img_error)}")
-                            continue
+                    for img in soup.find_all('img', src=True):
+                        src = img['src']
+                        
+                        # Make relative URLs absolute
+                        if src.startswith('/'):
+                            src = f"{urlparse(url).scheme}://{current_domain}{src}"
+                        elif not src.startswith('http'):
+                            src = f"{url.rstrip('/')}/{src.lstrip('/')}"
+                        
+                        alt = img.get('alt', '')
+                        
+                        images.append({
+                            'src': src,
+                            'alt': alt
+                        })
                     
-                    default_result["images"] = images
-                except Exception as e:
-                    print(f"Error extracting images: {str(e)}")
-                
-                # Page content analysis
-                try:
-                    # Extract text from the soup object
-                    content_text = soup.get_text()
-                    default_result["word_count"] = len(content_text.split())
+                    # Extract word count and content preview
+                    # Remove script and style elements
+                    for script in soup(["script", "style"]):
+                        script.extract()
                     
-                    # Get a preview of the content
-                    content_preview = " ".join(content_text.split()[:100])
-                    default_result["content_preview"] = content_preview
+                    # Get text content
+                    text_content = soup.get_text()
+                    
+                    # Clean up whitespace
+                    lines = (line.strip() for line in text_content.splitlines())
+                    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                    text_content = '\n'.join(chunk for chunk in chunks if chunk)
+                    
+                    # Calculate word count
+                    words = text_content.split()
+                    word_count = len(words)
+                    
+                    # Create content preview (first 200 words)
+                    content_preview = ' '.join(words[:200]) + '...' if len(words) > 200 else text_content
+                    
+                    # Compile the result
+                    analysis_result = {
+                        "url": url,
+                        "success": True,
+                        "title": title,
+                        "meta_description": meta_description,
+                        "meta_keywords": meta_keywords,
+                        "h1_tags": h1_tags,
+                        "h2_tags": h2_tags,
+                        "h3_tags": h3_tags,
+                        "internal_links": internal_links,
+                        "internal_links_count": len(internal_links),
+                        "external_links": external_links,
+                        "external_links_count": len(external_links),
+                        "images": images,
+                        "images_count": len(images),
+                        "word_count": word_count,
+                        "content_preview": content_preview
+                    }
+                    
+                    # Analysis is complete
+                    analysis_complete = True
+                    
+                    # Force garbage collection to free memory
+                    gc.collect()
+                    
+                    # Break out of the polling loop
+                    break
+                    
+                except asyncio.TimeoutError:
+                    elapsed = time.time() - start_time
+                    print(f"Timeout while analyzing {url} - elapsed time: {elapsed:.2f}s, retrying...")
+                    # Wait a bit before retrying
+                    await asyncio.sleep(2)
+                    
                 except Exception as e:
-                    print(f"Error analyzing content: {str(e)}")
-                
-                # Mark as successful
-                default_result["success"] = True
-                
-                return default_result
-                
+                    print(f"Error during analysis polling for {url}: {str(e)}")
+                    # Don't retry on other exceptions
+                    return default_result
+            
+            # Check if we timed out
+            if not analysis_complete:
+                print(f"Analysis of {url} timed out after {analysis_timeout} seconds")
+                return {
+                    **default_result,
+                    "error": f"Analysis timed out after {analysis_timeout} seconds"
+                }
+            
+            return analysis_result
+            
         except Exception as e:
             print(f"Error analyzing page {url}: {str(e)}")
-            default_result["error"] = str(e)
             return default_result
-            
-            # Get clean markdown content
-            # Check if the result has a markdown attribute
-            markdown_content = ""
-            if hasattr(result, 'markdown'):
-                markdown_content = result.markdown
-            else:
                 # If markdown is not available, use the text content
                 markdown_content = content_text
             
