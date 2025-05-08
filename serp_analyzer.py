@@ -130,10 +130,23 @@ class SerpAnalyzer:
             # Prepare the search URL
             search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&pws=0&safe=off&num={num_results}"
             
-            # Set up the proxy with authentication
+            # Generate a unique session ID to maintain the same IP for multiple requests
+            import uuid
+            session_id = str(uuid.uuid4())[:12]
+            
+            # Create username with country and session parameters
+            # Format: customer-USERNAME-cc-US-sessid-SESSION_ID-sesstime-10
+            # This targets US proxies and maintains the same IP for 10 minutes
+            enhanced_username = f"{OXYLABS_USERNAME}-cc-US-sessid-{session_id}-sesstime-10"
+            
+            print(f"Using Oxylabs with enhanced parameters: country=US, session={session_id}")
+            
+            # Set up the proxy with enhanced authentication
+            # Using the proxy port 7777 which is recommended for country-specific targeting
+            proxy_url = "pr.oxylabs.io:7777"
             proxies = {
-                "http": f"http://{OXYLABS_USERNAME}:{OXYLABS_PASSWORD}@{PROXY_URL}",
-                "https": f"http://{OXYLABS_USERNAME}:{OXYLABS_PASSWORD}@{PROXY_URL}"
+                "http": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}",
+                "https": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}"
             }
             
             # Set up headers to look like a real browser
@@ -144,10 +157,11 @@ class SerpAnalyzer:
                 "Referer": "https://www.google.com/",
                 "DNT": "1",
                 "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1"
+                "Upgrade-Insecure-Requests": "1",
+                "Cache-Control": "max-age=0"
             }
             
-            print(f"Making direct HTTP request to {search_url} via Oxylabs proxy")
+            print(f"Making direct HTTP request to {search_url} via Oxylabs country-specific proxy")
             
             # Make the request
             response = requests.get(
@@ -159,8 +173,17 @@ class SerpAnalyzer:
             
             # Check if the request was successful
             if response.status_code == 200:
+                # Save the HTML for debugging
+                html_content = response.text
+                print(f"HTML preview: {html_content[:500]}...")
+                
+                # Check if we got a CAPTCHA page
+                if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
+                    print("DETECTED: Google CAPTCHA page in direct HTTP request")
+                    return []
+                
                 # Process the HTML response
-                return await self._process_google_html(response.text, query, num_results)
+                return await self._process_google_html(html_content, query, num_results)
             else:
                 print(f"Error from Google: {response.status_code} - {response.reason}")
         
@@ -410,10 +433,14 @@ class SerpAnalyzer:
         print(f"HTML preview: {html_preview}")
         
         # Check for common Google blocks or CAPTCHAs
-        if "Our systems have detected unusual traffic" in html:
+        if "Our systems have detected unusual traffic" in html or "captcha" in html.lower():
             print("DETECTED: Google CAPTCHA page - we're being blocked")
+            # Try the regex method as a last resort
+            return await self._extract_results_with_regex(html, num_results)
+            
         if "sorry..." in html.lower() and "page you requested was not found" in html.lower():
             print("DETECTED: Google error page")
+            return []
                 
         # Try different selectors to find search results
         # Google's HTML structure changes frequently, so we need to try multiple selectors
@@ -479,6 +506,11 @@ class SerpAnalyzer:
                             'is_direct_link': True  # Flag to handle differently in the processing below
                         })
         
+        # If we still don't have results, try the regex method
+        if not result_elements:
+            print("No results found with any selectors, trying regex pattern matching")
+            return await self._extract_results_with_regex(html, num_results)
+        
         for element in result_elements:
             try:
                 # Check if this is a direct link from our fallback method
@@ -541,6 +573,72 @@ class SerpAnalyzer:
                 continue
                 
         print(f"Found {len(search_results)} search results")
+        print(f"Search results type: {type(search_results)}")
+        print(f"Search results count: {len(search_results)}")
+        return search_results
+        
+    async def _extract_results_with_regex(self, html, num_results=6):
+        """
+        Extract search results using regex patterns when BeautifulSoup selectors fail
+        This is a last resort method for when Google's HTML structure is completely different
+        """
+        import re
+        search_results = []
+        
+        print("Attempting to extract results with regex patterns")
+        
+        # Try to find URLs in the HTML
+        # Look for http/https URLs that might be search results
+        url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[\w/\-?=%.&~#]*'
+        urls = re.findall(url_pattern, html)
+        
+        # Filter out Google's own URLs and common resource URLs
+        filtered_urls = []
+        excluded_domains = ['google.com', 'gstatic.com', 'googleapis.com', 'youtube.com/favicon', 'googleusercontent.com']
+        
+        for url in urls:
+            if not any(domain in url for domain in excluded_domains):
+                # Clean up the URL if it's part of a larger string
+                url = url.split('"')[0].split("'")[0].split('&amp;')[0]
+                filtered_urls.append(url)
+        
+        # Remove duplicates while preserving order
+        unique_urls = []
+        for url in filtered_urls:
+            if url not in unique_urls:
+                unique_urls.append(url)
+        
+        print(f"Found {len(unique_urls)} unique URLs with regex")
+        
+        # For each URL, try to find a title nearby in the HTML
+        for url in unique_urls[:num_results]:
+            # Create a simple result with just the URL if we can't find a title
+            result = {
+                'title': url.split('//')[1].split('/')[0],  # Use domain as title
+                'url': url,
+                'snippet': 'No snippet available (extracted with regex)'
+            }
+            
+            # Try to find a title near this URL in the HTML
+            # Look for text between tags near the URL
+            url_index = html.find(url)
+            if url_index > 0:
+                # Look for text in a reasonable window around the URL
+                window_start = max(0, url_index - 200)
+                window_end = min(len(html), url_index + 200)
+                window = html[window_start:window_end]
+                
+                # Try to find text between tags that might be a title
+                title_matches = re.findall(r'>([^<>]{5,100})<', window)
+                if title_matches:
+                    # Use the longest match as the title (usually more descriptive)
+                    title = max(title_matches, key=len).strip()
+                    if title and len(title) > 5:  # Ensure it's a reasonable title
+                        result['title'] = title
+            
+            search_results.append(result)
+        
+        print(f"Extracted {len(search_results)} results with regex method")
         return search_results
     
     async def analyze_page(self, url):
