@@ -6,6 +6,21 @@ from urllib.parse import quote_plus
 from datetime import datetime
 from crawl4ai import AsyncWebCrawler
 
+# Import Oxylabs configuration
+try:
+    from oxylabs_config import (
+        OXYLABS_USERNAME, 
+        OXYLABS_PASSWORD, 
+        PROXY_URL, 
+        SERP_API_URL,
+        PROXY_TYPE,
+        COUNTRY
+    )
+    OXYLABS_CONFIGURED = True
+except (ImportError, AttributeError):
+    print("Oxylabs configuration not found or incomplete. Will use direct requests.")
+    OXYLABS_CONFIGURED = False
+
 class SerpAnalyzer:
     def __init__(self, headless=False):
         """
@@ -70,8 +85,89 @@ class SerpAnalyzer:
         
         # Set the search region to the United States by adding gl=us and hl=en parameters
         # Add additional parameters to make the request look more natural
-        search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&pws=0&safe=off"
+        search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&pws=0&safe=off&num={num_results}"
         print(f"Searching Google for: {query}")
+        
+        # Check if Oxylabs is configured
+        if OXYLABS_CONFIGURED:
+            # Determine which Oxylabs method to use
+            if PROXY_TYPE.lower() == "serp_api":
+                print("Using Oxylabs SERP API for search")
+                return await self._search_with_oxylabs_serp_api(query, num_results)
+            else:
+                print(f"Using Oxylabs {PROXY_TYPE} proxies for search")
+                return await self._search_with_oxylabs_proxy(query, search_url, num_results)
+        
+        # If Oxylabs is not configured, use the direct method with anti-bot measures
+        print("Using direct search method with anti-bot measures")
+        return await self._direct_search_google(query, search_url, num_results)
+    
+    async def _search_with_oxylabs_serp_api(self, query, num_results=6):
+        """
+        Search Google using Oxylabs SERP API
+        """
+        search_results = []
+        
+        try:
+            # Prepare the payload for Oxylabs SERP API
+            payload = {
+                "source": "google_search",
+                "domain": "com",
+                "query": query,
+                "parse": True,
+                "pages": 1,
+                "start_page": 1,
+                "results_per_page": num_results,
+                "geo_location": COUNTRY or "United States",
+                "user_agent_type": "desktop"
+            }
+            
+            # Make the request to Oxylabs SERP API
+            response = requests.post(
+                SERP_API_URL,
+                json=payload,
+                auth=(OXYLABS_USERNAME, OXYLABS_PASSWORD),
+                headers={
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            # Check if the request was successful
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Extract organic search results
+                if "results" in data and len(data["results"]) > 0:
+                    results_data = data["results"][0]
+                    
+                    if "organic_results" in results_data:
+                        organic_results = results_data["organic_results"]
+                        
+                        for result in organic_results[:num_results]:
+                            search_results.append({
+                                "title": result.get("title", ""),
+                                "url": result.get("url", ""),
+                                "snippet": result.get("description", "")
+                            })
+                        
+                        print(f"Found {len(search_results)} results via Oxylabs SERP API")
+                    else:
+                        print("No organic results found in Oxylabs SERP API response")
+                else:
+                    print("No results found in Oxylabs SERP API response")
+            else:
+                print(f"Error from Oxylabs SERP API: {response.status_code} - {response.text}")
+        
+        except Exception as e:
+            print(f"Error using Oxylabs SERP API: {str(e)}")
+        
+        return search_results
+    
+    async def _search_with_oxylabs_proxy(self, query, search_url, num_results=6):
+        """
+        Search Google using Oxylabs proxy with our crawler
+        """
+        search_results = []
         
         # List of common user agents to rotate through
         user_agents = [
@@ -82,7 +178,73 @@ class SerpAnalyzer:
         ]
         
         import random
-        import time
+        
+        # Configure browser options with Oxylabs proxy
+        browser_options = {
+            "headless": self.headless,
+            "cache_mode": "bypass",
+            "wait_until": "networkidle",
+            "page_timeout": 90000,
+            "delay_before_return_html": 2.0,
+            "word_count_threshold": 100,
+            "scan_full_page": True,
+            "scroll_delay": random.uniform(0.7, 1.5),
+            "process_iframes": False,
+            "remove_overlay_elements": True,
+            "magic": True,
+            "user_agent": random.choice(user_agents),
+            "extra_headers": {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Referer": "https://www.google.com/",
+                "DNT": "1"
+            },
+            "viewport": {
+                "width": random.choice([1366, 1440, 1536, 1920]),
+                "height": random.choice([768, 900, 1080])
+            },
+            # Add Oxylabs proxy configuration
+            "proxy": {
+                "server": f"http://{OXYLABS_USERNAME}:{OXYLABS_PASSWORD}@{PROXY_URL}",
+                "username": OXYLABS_USERNAME,
+                "password": OXYLABS_PASSWORD
+            }
+        }
+        
+        try:
+            # Create a new crawler with no config to avoid the verbose parameter conflict
+            async with AsyncWebCrawler() as crawler:
+                # Use the browser_options we defined above
+                browser_options["url"] = search_url
+                print(f"Starting crawler with Oxylabs proxy")
+                result = await crawler.arun(**browser_options)
+            
+            if not result.success:
+                print(f"Error searching Google with Oxylabs proxy: {result.error_message}")
+                return search_results
+                
+            # Process the HTML response
+            return await self._process_google_html(result.html, query, num_results)
+            
+        except Exception as e:
+            print(f"Error during search with Oxylabs proxy: {str(e)}")
+            return search_results
+    
+    async def _direct_search_google(self, query, search_url, num_results=6):
+        """
+        Search Google directly without proxies
+        """
+        search_results = []
+        
+        # List of common user agents to rotate through
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36"
+        ]
+        
+        import random
         
         # Configure browser options with anti-bot detection improvements
         browser_options = {
@@ -141,87 +303,86 @@ class SerpAnalyzer:
             if not result.success:
                 print(f"Error searching Google: {result.error_message}")
                 return search_results
+                
+            # Process the HTML response
+            return await self._process_google_html(result.html, query, num_results)
+            
         except Exception as e:
             print(f"Error during search: {str(e)}")
             return search_results
         
-        # Extract search results using CSS selectors
-        # Google search results are typically in divs with class 'g'
+    async def _process_google_html(self, html, query, num_results=6):
+        """
+        Process Google search HTML to extract search results
+        """
         search_results = []
         
-        try:
-            # The Crawl4AI library has changed, so we need to parse the HTML directly
-            from bs4 import BeautifulSoup
-            
-            if not hasattr(result, 'html'):
-                print("Could not find HTML content in the result object")
-                return search_results
+        # Parse the HTML with BeautifulSoup
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Save the HTML for debugging (only in development)
+        if not self.is_heroku:
+            debug_dir = os.path.join(os.getcwd(), 'debug')
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(os.path.join(debug_dir, f'google_search_{query.replace(" ", "_")}.html'), 'w', encoding='utf-8') as f:
+                f.write(html)
+            print(f"Saved HTML response for debugging")
+        
+        # Add debug info - print a small sample of the HTML to see what we're getting
+        html_preview = html[:500] + "..." if len(html) > 500 else html
+        print(f"HTML preview: {html_preview}")
+        
+        # Check for common Google blocks or CAPTCHAs
+        if "Our systems have detected unusual traffic" in html:
+            print("DETECTED: Google CAPTCHA page - we're being blocked")
+        if "sorry..." in html.lower() and "page you requested was not found" in html.lower():
+            print("DETECTED: Google error page")
                 
-            # Parse the HTML with BeautifulSoup
-            soup = BeautifulSoup(result.html, 'html.parser')
-            
-            # Save the HTML for debugging (only in development)
-            if not self.is_heroku:
-                debug_dir = os.path.join(os.getcwd(), 'debug')
-                os.makedirs(debug_dir, exist_ok=True)
-                with open(os.path.join(debug_dir, f'google_search_{query.replace(" ", "_")}.html'), 'w', encoding='utf-8') as f:
-                    f.write(result.html)
-                print(f"Saved HTML response for debugging")
-            
-            # Add debug info - print a small sample of the HTML to see what we're getting
-            html_preview = result.html[:500] + "..." if len(result.html) > 500 else result.html
-            print(f"HTML preview: {html_preview}")
-            
-            # Check for common Google blocks or CAPTCHAs
-            if "Our systems have detected unusual traffic" in result.html:
-                print("DETECTED: Google CAPTCHA page - we're being blocked")
-            if "sorry..." in result.html.lower() and "page you requested was not found" in result.html.lower():
-                print("DETECTED: Google error page")
+        # Try different selectors to find search results
+        # Google's HTML structure changes frequently, so we need to try multiple selectors
+        selectors = [
+            "div.g",
+            "div.tF2Cxc", 
+            "div.yuRUbf", 
+            "div[data-sokoban-container]",
+            "div.rc",
+            "div.g div.rc",
+            "div.jtfYYd",
+            "div.MjjYud",
+            "div.v7W49e",
+            "div.Gx5Zad",
+            "div.egMi0",
+            "div.BYM4Nd",
+            "div.ULSxyf",
+            "div.hlcw0c",
+            "div.g div",  # More generic fallback
+            "[data-header-feature]",
+            "[data-content-feature]"
+        ]
+        
+        # Try each selector until we find results
+        result_elements = []
+        for selector in selectors:
+            elements = soup.select(selector)
+            if elements:
+                print(f"Found {len(elements)} results with selector '{selector}'")
+                result_elements = elements[:num_results]
+                break
                 
-            # Try different selectors to find search results
-            # Google's HTML structure changes frequently, so we need to try multiple selectors
-            selectors = [
-                "div.g",
-                "div.tF2Cxc", 
-                "div.yuRUbf", 
-                "div[data-sokoban-container]",
-                "div.rc",
-                "div.g div.rc",
-                "div.jtfYYd",
-                "div.MjjYud",
-                "div.v7W49e",
-                "div.Gx5Zad",
-                "div.egMi0",
-                "div.BYM4Nd",
-                "div.ULSxyf",
-                "div.hlcw0c",
-                "div.g div",  # More generic fallback
-                "[data-header-feature]",
-                "[data-content-feature]"
-            ]
-            
-            # Try each selector until we find results
-            result_elements = []
-            for selector in selectors:
-                elements = soup.select(selector)
-                if elements:
-                    print(f"Found {len(elements)} results with selector '{selector}'")
-                    result_elements = elements[:num_results]
-                    break
-                    
-            if not result_elements:
-                # If we still can't find results, look for h3 tags (which usually contain titles)
-                h3_elements = soup.select("h3")
-                if h3_elements:
-                    print(f"Found {len(h3_elements)} h3 elements, trying to find parent result containers")
-                    # For each h3, try to find its parent container
-                    for h3 in h3_elements[:num_results]:
-                        parent = h3.parent
-                        for _ in range(3):  # Go up to 3 levels up to find a container
-                            if parent and parent.name == 'div':
-                                result_elements.append(parent)
-                                break
-                            parent = parent.parent if parent else None
+        if not result_elements:
+            # If we still can't find results, look for h3 tags (which usually contain titles)
+            h3_elements = soup.select("h3")
+            if h3_elements:
+                print(f"Found {len(h3_elements)} h3 elements, trying to find parent result containers")
+                # For each h3, try to find its parent container
+                for h3 in h3_elements[:num_results]:
+                    parent = h3.parent
+                    for _ in range(3):  # Go up to 3 levels up to find a container
+                        if parent and parent.name == 'div':
+                            result_elements.append(parent)
+                            break
+                        parent = parent.parent if parent else None
             
             # If still no results, try to find any links on the page
             if not result_elements:
@@ -241,73 +402,70 @@ class SerpAnalyzer:
                             'url': link['href'],
                             'is_direct_link': True  # Flag to handle differently in the processing below
                         })
-            
-            for element in result_elements:
-                try:
-                    # Check if this is a direct link from our fallback method
-                    if isinstance(element, dict) and element.get('is_direct_link'):
-                        search_results.append({
-                            'title': element.get('title', 'Unknown Title'),
-                            'url': element.get('url', ''),
-                            'snippet': 'No snippet available (direct link extraction)'
-                        })
-                        continue
-                    
-                    # Extract title, URL, and snippet
-                    title_element = element.select_one("h3")
-                    link_element = element.select_one("a")
-                    
-                    # Try multiple snippet selectors
-                    snippet_selectors = ["div.VwiC3b", "span.aCOpRe", "div.lyLwlc", "div[data-content-feature='1']", "div.s3v9rd", "div.lEBKkf"]
-                    snippet_element = None
-                    for selector in snippet_selectors:
-                        snippet_element = element.select_one(selector)
-                        if snippet_element:
-                            break
-                    
-                    # If we couldn't find a title element but there's a link with text, use that
-                    if not title_element and link_element and link_element.get_text().strip():
-                        title = link_element.get_text().strip()
-                    elif title_element:
-                        title = title_element.get_text().strip()
-                    else:
-                        title = "Unknown Title"
-                    
-                    # Get URL
-                    url = ''
-                    if link_element:
-                        url = link_element.get('href', '')
-                        
-                        # Clean up the URL if it's a Google redirect
-                        if url.startswith('/url?'):
-                            url = url.split('&sa=')[0].replace('/url?q=', '')
-                            url = unquote(url)  # Decode URL-encoded characters
-                    
-                    # Get snippet if available
-                    snippet = ""
-                    if snippet_element:
-                        snippet = snippet_element.get_text().strip()
-                    
-                    # Only add if we have at least a URL
-                    if url:
-                        # Add to results
-                        search_results.append({
-                            'title': title,
-                            'url': url,
-                            'snippet': snippet
-                        })
-                        
-                        if len(search_results) >= num_results:
-                            break
-                except Exception as e:
-                    print(f"Error extracting search result: {str(e)}")
+        
+        for element in result_elements:
+            try:
+                # Check if this is a direct link from our fallback method
+                if isinstance(element, dict) and element.get('is_direct_link'):
+                    search_results.append({
+                        'title': element.get('title', 'Unknown Title'),
+                        'url': element.get('url', ''),
+                        'snippet': 'No snippet available (direct link extraction)'
+                    })
                     continue
-            
-            print(f"Found {len(search_results)} search results")
-            return search_results
-        except Exception as e:
-            print(f"Error parsing search results: {str(e)}")
-            return search_results
+                
+                # Extract title, URL, and snippet
+                title_element = element.select_one("h3")
+                link_element = element.select_one("a")
+                
+                # Try multiple snippet selectors
+                snippet_selectors = ["div.VwiC3b", "span.aCOpRe", "div.lyLwlc", "div[data-content-feature='1']", "div.s3v9rd", "div.lEBKkf"]
+                snippet_element = None
+                for selector in snippet_selectors:
+                    snippet_element = element.select_one(selector)
+                    if snippet_element:
+                        break
+                
+                # If we couldn't find a title element but there's a link with text, use that
+                if not title_element and link_element and link_element.get_text().strip():
+                    title = link_element.get_text().strip()
+                elif title_element:
+                    title = title_element.get_text().strip()
+                else:
+                    title = "Unknown Title"
+                
+                # Get URL
+                url = ''
+                if link_element:
+                    url = link_element.get('href', '')
+                    
+                    # Clean up the URL if it's a Google redirect
+                    if url.startswith('/url?'):
+                        url = url.split('&sa=')[0].replace('/url?q=', '')
+                        url = unquote(url)  # Decode URL-encoded characters
+                
+                # Get snippet if available
+                snippet = ""
+                if snippet_element:
+                    snippet = snippet_element.get_text().strip()
+                
+                # Only add if we have at least a URL
+                if url:
+                    # Add to results
+                    search_results.append({
+                        'title': title,
+                        'url': url,
+                        'snippet': snippet
+                    })
+                    
+                    if len(search_results) >= num_results:
+                        break
+            except Exception as e:
+                print(f"Error extracting search result: {str(e)}")
+                continue
+                
+        print(f"Found {len(search_results)} search results")
+        return search_results
     
     async def analyze_page(self, url):
         """
