@@ -70,8 +70,12 @@ RUN ls -la /app/.playwright
 # Copy the rest of the application
 COPY . .
 
+# Ensure start.sh has proper permissions and line endings
+RUN chmod +x start.sh && \
+    sed -i 's/\r$//' start.sh
+
 # Expose the port the app runs on
 EXPOSE 8080
 
 # Command to run the application using the start.sh script
-CMD ["bash", "./start.sh"]
+CMD ["/bin/bash", "./start.sh"]
