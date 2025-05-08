@@ -779,7 +779,6 @@ class SerpAnalyzer:
                     search_url,
                     headless=self.headless,
                     proxy=proxy_url,
-                    verbose=True,
                     cache_mode="bypass",
                     wait_until="networkidle",
                     page_timeout=30000,
@@ -858,7 +857,6 @@ class SerpAnalyzer:
                     search_url,
                     headless=self.headless,
                     user_agent=random.choice(user_agents),
-                    verbose=True,
                     cache_mode="bypass",
                     wait_until="networkidle",
                     page_timeout=30000,
@@ -904,7 +902,6 @@ class SerpAnalyzer:
                 result = await crawler.arun(
                     url,
                     headless=self.headless,
-                    verbose=True,
                     cache_mode="bypass",
                     wait_until="networkidle",
                     page_timeout=30000,
