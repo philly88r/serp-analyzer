@@ -129,26 +129,67 @@ class SerpAnalyzer:
         """
         search_results = []
         
-        # List of US states to rotate through
-        us_states = ["us_florida", "us_california", "us_massachusetts", "us_north_carolina", "us_south_carolina", "us_nevada", "us_new_york", "us_texas", "us_illinois", "us_washington"]
+        # Expanded list of US states to rotate through for better diversity
+        us_states = [
+            "us_florida", "us_california", "us_massachusetts", "us_north_carolina", 
+            "us_south_carolina", "us_nevada", "us_new_york", "us_texas", 
+            "us_illinois", "us_washington", "us_colorado", "us_arizona", 
+            "us_oregon", "us_virginia", "us_georgia", "us_michigan", 
+            "us_ohio", "us_pennsylvania", "us_new_jersey", "us_minnesota"
+        ]
         
-        # Track last used state and time to implement rotation
-        if not hasattr(self, '_last_proxy_rotation'):
-            self._last_proxy_rotation = 0
-            self._last_state_index = 0
+        # Track last used state, time, and block count for adaptive rotation
+        if not hasattr(self, '_proxy_state'):
+            self._proxy_state = {
+                'last_rotation': 0,
+                'last_state': None,
+                'block_count': 0,
+                'last_block_time': 0,
+                'used_states': set()
+            }
         
-        # Check if we need to rotate proxies (every 3-5 minutes)
+        # Determine rotation interval based on block history
         current_time = time.time()
-        rotation_interval = random.randint(180, 300)  # 3-5 minutes in seconds
         
-        if current_time - self._last_proxy_rotation > rotation_interval:
-            self._last_state_index = (self._last_state_index + 1) % len(us_states)
-            self._last_proxy_rotation = current_time
-            print(f"Rotating proxy: Switching to US state {us_states[self._last_state_index]}")
+        # Base rotation interval is 1-2 minutes
+        base_interval = random.randint(60, 120)
         
-        # Get the current US state to use
-        current_state = us_states[self._last_state_index]
+        # If we've seen blocks recently, reduce the interval
+        if self._proxy_state['block_count'] > 0:
+            # Reset block count after 30 minutes
+            if current_time - self._proxy_state['last_block_time'] > 1800:
+                self._proxy_state['block_count'] = 0
+            else:
+                # Exponentially decrease interval based on block count
+                # More blocks = more frequent rotation
+                reduction_factor = min(0.9, 0.2 * self._proxy_state['block_count'])
+                base_interval = int(base_interval * (1 - reduction_factor))
+                print(f"Block-adaptive rotation: Interval reduced to {base_interval}s due to {self._proxy_state['block_count']} recent blocks")
         
+        # Check if we need to rotate proxies
+        if current_time - self._proxy_state['last_rotation'] > base_interval:
+            # Choose a random state, but avoid recently used ones if possible
+            available_states = [s for s in us_states if s not in self._proxy_state['used_states']]
+            
+            # If all states have been used, reset and use any state
+            if not available_states:
+                self._proxy_state['used_states'] = set()
+                available_states = us_states
+            
+            # Select a random state from available ones
+            current_state = random.choice(available_states)
+            
+            # Update state tracking
+            self._proxy_state['last_rotation'] = current_time
+            self._proxy_state['last_state'] = current_state
+            self._proxy_state['used_states'].add(current_state)
+            
+            # Keep track of the last 10 used states to avoid repetition
+            if len(self._proxy_state['used_states']) > 10:
+                self._proxy_state['used_states'].pop()
+                
+            print(f"Rotating proxy: Switching to US state {current_state}")
+            
         try:
             # Prepare the search URL
             search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&pws=0&safe=off&num={num_results}"
@@ -171,15 +212,35 @@ class SerpAnalyzer:
                 "http": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}",
                 "https": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}"
             }
-            
-            # Rotate user agents as well
+                
+            # Rotate user agents with more modern browser signatures
             user_agents = [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36"
+                # Chrome on Windows
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+                # Chrome on macOS
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
+                # Edge on Windows
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36 Edg/112.0.1722.58",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.35",
+                # Firefox on Windows
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0",
+                # Firefox on macOS
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/113.0",
+                # Safari on macOS
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15"
             ]
+            
+            # Add request throttling to avoid triggering Google's rate limiting
+            # Wait a small random time before making the request
+            throttle_time = random.uniform(0.5, 2.0)
+            await asyncio.sleep(throttle_time)
+            print(f"Request throttling: Waited {throttle_time:.2f}s before making request")
             
             # Set up headers to look like a real browser
             headers = {
@@ -209,20 +270,53 @@ class SerpAnalyzer:
                 html_content = response.text
                 print(f"HTML preview: {html_content[:500]}...")
                 
-                # Check if we got a CAPTCHA page
-                if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
-                    print("DETECTED: Google CAPTCHA page in direct HTTP request")
-                    # Try with a different state immediately
-                    self._last_state_index = (self._last_state_index + 1) % len(us_states)
-                    print(f"Immediate proxy rotation: Switching to US state {us_states[self._last_state_index]}")
+                # Check if we got a CAPTCHA page or any other block indicator
+                if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower() or "sorry..." in html_content.lower():
+                    print("DETECTED: Google CAPTCHA or block page in direct HTTP request")
+                    
+                    # Track the block for adaptive rotation
+                    self._proxy_state['block_count'] += 1
+                    self._proxy_state['last_block_time'] = time.time()
+                    
+                    # Immediately rotate to a new state that hasn't been used recently
+                    available_states = [s for s in us_states if s != self._proxy_state['last_state'] and s not in self._proxy_state['used_states']]
+                    if not available_states:
+                        # If all states have been tried, just pick a random one different from current
+                        available_states = [s for s in us_states if s != self._proxy_state['last_state']]
+                        if not available_states:  # Fallback if somehow we only have one state
+                            available_states = us_states
+                    
+                    # Choose a random state from available ones
+                    new_state = random.choice(available_states)
+                    self._proxy_state['last_state'] = new_state
+                    self._proxy_state['used_states'].add(new_state)
+                    self._proxy_state['last_rotation'] = time.time()
+                    
+                    print(f"Immediate proxy rotation due to block: Switching to US state {new_state}")
+                    
+                    # Wait a bit longer before retrying to avoid rapid-fire requests
+                    backoff_time = random.uniform(2.0, 5.0)
+                    await asyncio.sleep(backoff_time)
+                    print(f"Backing off for {backoff_time:.2f}s before retry")
+                    
                     return []
-                
+                    
                 # Process the HTML response
                 return await self._process_google_html(html_content, query, num_results)
             else:
                 print(f"Error from Google: {response.status_code} - {response.reason}")
-                # Try with a different state on error
-                self._last_state_index = (self._last_state_index + 1) % len(us_states)
+                    
+                # Track the error as a potential block
+                self._proxy_state['block_count'] += 1
+                self._proxy_state['last_block_time'] = time.time()
+                
+                # Immediately rotate to a new state
+                available_states = [s for s in us_states if s != self._proxy_state['last_state']]
+                new_state = random.choice(available_states)
+                self._proxy_state['last_state'] = new_state
+                self._proxy_state['last_rotation'] = time.time()
+                
+                print(f"Immediate proxy rotation due to error: Switching to US state {new_state}")
         
         except Exception as e:
             print(f"Error using direct HTTP request with Oxylabs proxy: {str(e)}")
