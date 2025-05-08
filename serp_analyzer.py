@@ -4,6 +4,8 @@ import sys
 import json
 import csv
 import time
+import gc
+import random
 import asyncio
 import logging
 import requests
@@ -127,20 +129,40 @@ class SerpAnalyzer:
         """
         search_results = []
         
+        # List of US states to rotate through
+        us_states = ["us_florida", "us_california", "us_massachusetts", "us_north_carolina", "us_south_carolina", "us_nevada", "us_new_york", "us_texas", "us_illinois", "us_washington"]
+        
+        # Track last used state and time to implement rotation
+        if not hasattr(self, '_last_proxy_rotation'):
+            self._last_proxy_rotation = 0
+            self._last_state_index = 0
+        
+        # Check if we need to rotate proxies (every 3-5 minutes)
+        current_time = time.time()
+        rotation_interval = random.randint(180, 300)  # 3-5 minutes in seconds
+        
+        if current_time - self._last_proxy_rotation > rotation_interval:
+            self._last_state_index = (self._last_state_index + 1) % len(us_states)
+            self._last_proxy_rotation = current_time
+            print(f"Rotating proxy: Switching to US state {us_states[self._last_state_index]}")
+        
+        # Get the current US state to use
+        current_state = us_states[self._last_state_index]
+        
         try:
             # Prepare the search URL
             search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&pws=0&safe=off&num={num_results}"
             
-            # Generate a unique session ID to maintain the same IP for multiple requests
+            # Generate a unique session ID for each request
             import uuid
             session_id = str(uuid.uuid4())[:12]
             
-            # Create username with country and session parameters
-            # Format: customer-USERNAME-cc-US-sessid-SESSION_ID-sesstime-10
-            # This targets US proxies and maintains the same IP for 10 minutes
-            enhanced_username = f"{OXYLABS_USERNAME}-cc-US-sessid-{session_id}-sesstime-10"
+            # Create username with US state and session parameters
+            # Format: customer-USERNAME-st-STATE-sessid-SESSION_ID-sesstime-3
+            # This targets specific US state proxies and maintains the same IP for 3 minutes
+            enhanced_username = f"{OXYLABS_USERNAME}-st-{current_state}-sessid-{session_id}-sesstime-3"
             
-            print(f"Using Oxylabs with enhanced parameters: country=US, session={session_id}")
+            print(f"Using Oxylabs with enhanced parameters: US state={current_state}, session={session_id}")
             
             # Set up the proxy with enhanced authentication
             # Using the proxy port 7777 which is recommended for country-specific targeting
@@ -150,9 +172,18 @@ class SerpAnalyzer:
                 "https": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}"
             }
             
+            # Rotate user agents as well
+            user_agents = [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36"
+            ]
+            
             # Set up headers to look like a real browser
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+                "User-Agent": random.choice(user_agents),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
                 "Referer": "https://www.google.com/",
@@ -181,15 +212,22 @@ class SerpAnalyzer:
                 # Check if we got a CAPTCHA page
                 if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
                     print("DETECTED: Google CAPTCHA page in direct HTTP request")
+                    # Try with a different state immediately
+                    self._last_state_index = (self._last_state_index + 1) % len(us_states)
+                    print(f"Immediate proxy rotation: Switching to US state {us_states[self._last_state_index]}")
                     return []
                 
                 # Process the HTML response
                 return await self._process_google_html(html_content, query, num_results)
             else:
                 print(f"Error from Google: {response.status_code} - {response.reason}")
+                # Try with a different state on error
+                self._last_state_index = (self._last_state_index + 1) % len(us_states)
         
         except Exception as e:
             print(f"Error using direct HTTP request with Oxylabs proxy: {str(e)}")
+            # Try with a different state on exception
+            self._last_state_index = (self._last_state_index + 1) % len(us_states)
         
         return search_results
     
