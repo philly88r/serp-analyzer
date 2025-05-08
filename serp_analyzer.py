@@ -586,75 +586,235 @@ class SerpAnalyzer:
         search_results = []
         
         try:
-            # Parse the HTML with BeautifulSoup
+            if not html or len(html) < 1000:
+                print(f"Error: HTML content too short or empty for query '{query}'")
+                return []
+            
+            # Use BeautifulSoup to parse the HTML
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Try multiple selectors for Google search results
-            selectors = ["div.g", "div.Gx5Zad", "div.tF2Cxc", "div.yuRUbf", "div[jscontroller]", "div.rc"]
-            result_elements = []
+            # More comprehensive check for CAPTCHA or block page
+            captcha_indicators = [
+                'Our systems have detected unusual traffic',
+                'unusual traffic from your computer network',
+                'Please try your request again later',
+                'Type the text',
+                'captcha',
+                'security check',
+                'confirm you\'re not a robot',
+                'sorry for the inconvenience',
+                'automated queries',
+                'please click here if you are not redirected',
+                'enable javascript',
+                'detected unusual activity'
+            ]
             
-            for selector in selectors:
-                elements = soup.select(selector)
-                if elements:
-                    print(f"Found {len(elements)} results with selector: {selector}")
-                    result_elements = elements
-                    break
+            html_lower = html.lower()
+            for indicator in captcha_indicators:
+                if indicator.lower() in html_lower:
+                    print(f"Detected CAPTCHA or block page for query '{query}': {indicator}")
+                    return []
             
-            if not result_elements:
-                print("No results found with standard selectors, trying alternative methods")
-                # Try a more generic approach
-                result_elements = soup.select("div > a")
-                if result_elements:
-                    print(f"Found {len(result_elements)} results with generic selector")
+            # Check for actual search result indicators
+            search_indicators = ['search results', 'results for', 'showing results for']
+            has_search_results = any(indicator in html_lower for indicator in search_indicators)
             
-            # Process each result element
-            for element in result_elements:
-                try:
-                    # Extract the title and URL
-                    title_element = element.select_one("h3") or element.select_one("a h3") or element.select_one("a")
-                    title = title_element.get_text().strip() if title_element else "Unknown Title"
-                    
-                    # Find the URL - try multiple approaches
-                    url_element = element.select_one("a") or element.select_one("div.yuRUbf a") or element.select_one("div.rc a")
-                    url = url_element.get("href") if url_element else ""
-                    
-                    # Clean the URL (remove tracking parameters)
-                    if url.startswith("/url?q="):
-                        url = url.split("/url?q=")[1].split("&")[0]
-                    
-                    # Skip if URL is not valid
-                    if not url or not url.startswith("http"):
+            if not has_search_results:
+                print(f"Warning: HTML may not contain search results for query '{query}'")
+                # Continue anyway, as some Google pages don't have these indicators
+            
+            # Try different selectors to find search results
+            # Google periodically changes their HTML structure, so we need multiple approaches
+            
+            # Approach 1: Standard search result containers
+            results = soup.select('div.tF2Cxc')
+            if results:
+                print(f"Found {len(results)} results with selector: div.tF2Cxc")
+                
+                # Extract data from each result
+                urls = set()
+                for result in results[:num_results*2]:  # Look at more results to find enough valid ones
+                    # Extract URL
+                    url_element = result.select_one('a')
+                    if not url_element or not url_element.has_attr('href'):
                         continue
+                        
+                    url = url_element['href']
+                    if not url.startswith('http') or 'google.com' in url:
+                        continue
+                        
+                    # Skip if we already have this URL
+                    if url in urls:
+                        continue
+                    urls.add(url)
                     
-                    # Extract the snippet
-                    snippet_element = element.select_one("div.VwiC3b") or element.select_one("span.st") or element.select_one("div.s")
-                    snippet = snippet_element.get_text().strip() if snippet_element else ""
+                    # Extract title
+                    title_element = result.select_one('h3')
+                    title = title_element.get_text() if title_element else 'No Title'
                     
-                    # Add this result
+                    # Extract snippet
+                    snippet_element = result.select_one('div.VwiC3b')
+                    snippet = snippet_element.get_text() if snippet_element else ''
+                    
+                    # Add to results
                     search_results.append({
-                        "title": title,
-                        "url": url,
-                        "snippet": snippet
+                        'position': len(search_results) + 1,
+                        'title': title,
+                        'url': url,
+                        'snippet': snippet
                     })
-                except Exception as e:
-                    print(f"Error extracting result: {str(e)}")
-                    continue
+                    
+                    # Stop if we have enough results
+                    if len(search_results) >= num_results:
+                        break
+                
+                print(f"Found {len(urls)} unique URLs")
+                if search_results:
+                    return search_results
             
-            # Remove duplicates based on URL
-            unique_urls = set()
-            unique_results = []
-            for result in search_results:
-                if result["url"] not in unique_urls:
-                    unique_urls.add(result["url"])
-                    unique_results.append(result)
+            # Approach 2: Try alternative selectors if the first approach failed
+            print("No results found with standard selectors, trying alternative methods")
             
-            print(f"Found {len(unique_results)} unique URLs")
-            return unique_results[:num_results]  # Return only the requested number of results
+            # Try a more generic selector - ordered by specificity
+            selector_attempts = [
+                'div.g',
+                'div[data-sokoban-container]',
+                'div.rc',
+                'div[data-hveid]',
+                # More generic fallbacks
+                'div.yuRUbf',  # Another common container
+                'h3.LC20lb',   # Title elements
+                'div.NJo7tc',  # Another result container
+                'div.v7W49e',  # Search result block
+                'div.MjjYud',  # Outer container for results
+                'a[href^="http"]'  # Last resort: any link
+            ]
+            
+            for selector in selector_attempts:
+                results = soup.select(selector)
+                if results and len(results) > 0:
+                    print(f"Found {len(results)} results with selector: {selector}")
+                    break
+                
+            if results:
+                # Extract URLs from generic results
+                urls = set()
+                for result in results[:num_results*3]:  # Look at more results to find enough valid ones
+                    # For title elements, get the parent
+                    if selector == 'h3.LC20lb':
+                        result = result.parent.parent  # Navigate up to container
+                    
+                    # For direct links, use the element itself
+                    if selector == 'a[href^="http"]':
+                        url_element = result
+                    else:
+                        # Extract URL - try multiple approaches
+                        url_element = (result.select_one('a[href^="http"]') or 
+                                      result.select_one('a[ping]') or
+                                      result.select_one('a'))
+                    
+                    if not url_element or not url_element.has_attr('href'):
+                        continue
+                        
+                    url = url_element['href']
+                    # Skip Google internal links and non-http links
+                    if not url.startswith('http') or 'google.com' in url or '/search?' in url or '/url?' in url:
+                        continue
+                        
+                    # Skip if we already have this URL
+                    if url in urls:
+                        continue
+                    urls.add(url)
+                    
+                    # Extract title - try multiple approaches
+                    title_element = (result.select_one('h3') or 
+                                    result.select_one('h4') or 
+                                    result.select_one('a > div') or
+                                    url_element)  # Use link text as last resort
+                    
+                    title = title_element.get_text().strip() if title_element else 'No Title'
+                    if not title or title == 'No Title':
+                        # Try to extract from URL as last resort
+                        from urllib.parse import urlparse
+                        domain = urlparse(url).netloc
+                        title = domain.replace('www.', '')
+                    
+                    # Extract snippet - try multiple approaches
+                    snippet_selectors = [
+                        'div[style*="-webkit-line-clamp"]',
+                        'span.st', 
+                        'div.s',
+                        'div.VwiC3b',
+                        'div.lEBKkf',
+                        'div.yXK7lf',
+                        'span.MUxGbd',
+                        'div.lyLwlc'
+                    ]
+                    
+                    snippet = ''
+                    for s_selector in snippet_selectors:
+                        snippet_element = result.select_one(s_selector)
+                        if snippet_element:
+                            snippet = snippet_element.get_text().strip()
+                            break
+                    
+                    # Add to results
+                    search_results.append({
+                        'position': len(search_results) + 1,
+                        'title': title,
+                        'url': url,
+                        'snippet': snippet
+                    })
+                    
+                    # Stop if we have enough results
+                    if len(search_results) >= num_results:
+                        break
+                
+                print(f"Found {len(urls)} unique URLs")
+                if search_results:
+                    return search_results
+            
+            # If we still don't have results, try regex extraction
+            print("Attempting to extract results with regex patterns")
+            regex_results = await self._extract_results_with_regex(html, num_results)
+            
+            if regex_results and len(regex_results) > 0:
+                return regex_results
+                
+            # Last resort: try to extract any URLs from the page
+            print("Attempting last resort URL extraction")
+            all_links = soup.find_all('a', href=True)
+            urls = set()
+            
+            for link in all_links:
+                url = link['href']
+                if url.startswith('http') and 'google.com' not in url and '/search?' not in url and '/url?' not in url:
+                    urls.add(url)
+            
+            if urls:
+                print(f"Last resort found {len(urls)} potential URLs")
+                results = []
+                for i, url in enumerate(list(urls)[:num_results]):
+                    from urllib.parse import urlparse
+                    domain = urlparse(url).netloc
+                    title = domain.replace('www.', '')
+                    
+                    results.append({
+                        'position': i + 1,
+                        'title': title,
+                        'url': url,
+                        'snippet': ''
+                    })
+                return results
+            
+            return []
             
         except Exception as e:
-            print(f"Error processing Google HTML: {str(e)}")
-            return []
-    
+            print(f"Error processing Google HTML for query '{query}': {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []   
+            
     async def _extract_results_with_regex(self, html, num_results=6):
         """
         Extract search results using regex patterns when BeautifulSoup selectors fail
