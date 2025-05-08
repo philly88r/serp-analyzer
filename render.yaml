@@ -1,5 +1,4 @@
 services:
-  # A Docker web service - Updated for deployment
   - type: web
     name: serp-analyzer
     env: docker
@@ -9,6 +8,9 @@ services:
     branch: main
     dockerfilePath: ./Dockerfile
     dockerCommand: ./start.sh
+    buildCommand: python -m playwright install chromium && python -m playwright install-deps chromium
+    healthCheckPath: /
+    autoDeploy: true
     envVars:
       - key: PORT
         value: 8080
@@ -24,9 +26,10 @@ services:
         value: "true"
       - key: PLAYWRIGHT_SKIP_VALIDATION
         value: "1"
-      # Oxylabs Configuration
       - key: OXYLABS_USERNAME
+        value: ""
       - key: OXYLABS_PASSWORD
+        value: ""
       - key: PROXY_URL
         value: "us-pr.oxylabs.io:10000"
       - key: SERP_API_URL
@@ -36,6 +39,4 @@ services:
       - key: COUNTRY
         value: "us"
       - key: GEMINI_API_KEY
-    buildCommand: python -m playwright install chromium && python -m playwright install-deps chromium
-    healthCheckPath: /
-    autoDeploy: true
+        value: ""
