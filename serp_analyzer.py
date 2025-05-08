@@ -1,9 +1,16 @@
-import asyncio
 import os
+import sys
 import json
+import csv
+import time
+import asyncio
+import logging
+import requests
 import pandas as pd
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote
 from datetime import datetime
+from pathlib import Path
+from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler
 
 # Import Oxylabs configuration
@@ -90,17 +97,77 @@ class SerpAnalyzer:
         
         # Check if Oxylabs is configured
         if OXYLABS_CONFIGURED:
-            # Determine which Oxylabs method to use
+            # Try different methods in order of reliability
+            # 1. First try direct HTTP request with Oxylabs proxy (often most reliable)
+            print("Trying direct HTTP request with Oxylabs proxy")
+            results = await self._search_with_oxylabs_direct_http(query, num_results)
+            if results and len(results) > 0:
+                return results
+                
+            # 2. If that fails, try Oxylabs SERP API if configured for that
             if PROXY_TYPE.lower() == "serp_api":
-                print("Using Oxylabs SERP API for search")
-                return await self._search_with_oxylabs_serp_api(query, num_results)
-            else:
-                print(f"Using Oxylabs {PROXY_TYPE} proxies for search")
-                return await self._search_with_oxylabs_proxy(query, search_url, num_results)
+                print("Direct HTTP request failed, trying Oxylabs SERP API")
+                results = await self._search_with_oxylabs_serp_api(query, num_results)
+                if results and len(results) > 0:
+                    return results
+            
+            # 3. Finally, try browser automation with Oxylabs proxy
+            print(f"Trying browser automation with Oxylabs {PROXY_TYPE} proxies")
+            return await self._search_with_oxylabs_proxy(query, search_url, num_results)
         
         # If Oxylabs is not configured, use the direct method with anti-bot measures
         print("Using direct search method with anti-bot measures")
         return await self._direct_search_google(query, search_url, num_results)
+        
+    async def _search_with_oxylabs_direct_http(self, query, num_results=6):
+        """
+        Search Google using direct HTTP requests with Oxylabs proxy
+        This method often works better than browser automation for simple searches
+        """
+        search_results = []
+        
+        try:
+            # Prepare the search URL
+            search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&pws=0&safe=off&num={num_results}"
+            
+            # Set up the proxy with authentication
+            proxies = {
+                "http": f"http://{OXYLABS_USERNAME}:{OXYLABS_PASSWORD}@{PROXY_URL}",
+                "https": f"http://{OXYLABS_USERNAME}:{OXYLABS_PASSWORD}@{PROXY_URL}"
+            }
+            
+            # Set up headers to look like a real browser
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Referer": "https://www.google.com/",
+                "DNT": "1",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            }
+            
+            print(f"Making direct HTTP request to {search_url} via Oxylabs proxy")
+            
+            # Make the request
+            response = requests.get(
+                search_url,
+                proxies=proxies,
+                headers=headers,
+                timeout=30
+            )
+            
+            # Check if the request was successful
+            if response.status_code == 200:
+                # Process the HTML response
+                return await self._process_google_html(response.text, query, num_results)
+            else:
+                print(f"Error from Google: {response.status_code} - {response.reason}")
+        
+        except Exception as e:
+            print(f"Error using direct HTTP request with Oxylabs proxy: {str(e)}")
+        
+        return search_results
     
     async def _search_with_oxylabs_serp_api(self, query, num_results=6):
         """
@@ -203,11 +270,20 @@ class SerpAnalyzer:
                 "width": random.choice([1366, 1440, 1536, 1920]),
                 "height": random.choice([768, 900, 1080])
             },
-            # Add Oxylabs proxy configuration
+            # Add Oxylabs proxy configuration - improved format
             "proxy": {
-                "server": f"http://{OXYLABS_USERNAME}:{OXYLABS_PASSWORD}@{PROXY_URL}",
+                "server": f"http://{PROXY_URL}",
                 "username": OXYLABS_USERNAME,
                 "password": OXYLABS_PASSWORD
+            },
+            # Add additional headers for proxy
+            "extra_headers": {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Referer": "https://www.google.com/",
+                "DNT": "1",
+                "X-Crawlera-Session": f"create",
+                "X-Crawlera-Cookies": "disable"
             }
         }
         
