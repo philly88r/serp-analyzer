@@ -83,7 +83,7 @@ class SerpAnalyzer:
             'used_states': set(),
             'state_blocks': {state: 0 for state in us_states},
             'state_delays': {state: 1 for state in us_states},  # Default 1 second delay
-            'circuit_breaker': {state: {'is_open': False, 'reset_timeout': 180, 'last_attempt': time.time()} for state in us_states},
+            'circuit_breaker': {state: {'is_open': False, 'reset_timeout': 180, 'last_attempt': time.time(), 'failure_count': 0} for state in us_states},
             'rotation_interval': 60,  # 1 minute default (more aggressive)
             'last_rotation_time': time.time(),
             'last_rotation': time.time(),  # For compatibility with existing code
@@ -386,12 +386,45 @@ class SerpAnalyzer:
                     # Track the block for adaptive rotation
                     self._proxy_state['block_count'] += 1
                     self._proxy_state['last_block_time'] = time.time()
+                    
+                    # Get current state, use a default if None
                     current_state = self._proxy_state['last_state']
+                    if current_state is None:
+                        # Use the first state in the list as default
+                        us_states = list(self._proxy_state['circuit_breaker'].keys())
+                        if us_states:
+                            current_state = us_states[0]
+                            self._proxy_state['last_state'] = current_state
+                        else:
+                            # Fallback to a default state
+                            current_state = "us_default"
+                            self._proxy_state['circuit_breaker'][current_state] = {
+                                'is_open': False,
+                                'reset_timeout': 180,
+                                'last_attempt': time.time(),
+                                'failure_count': 0
+                            }
+                            self._proxy_state['last_state'] = current_state
                     
                     # Update circuit breaker for the current state
-                    circuit = self._proxy_state['circuit_breaker'][current_state]
-                    circuit['failure_count'] += 1
-                    circuit['last_attempt'] = time.time()
+                    try:
+                        circuit = self._proxy_state['circuit_breaker'][current_state]
+                        
+                        # Ensure failure_count exists
+                        if 'failure_count' not in circuit:
+                            circuit['failure_count'] = 0
+                            
+                        circuit['failure_count'] += 1
+                        circuit['last_attempt'] = time.time()
+                    except Exception as e:
+                        print(f"Error updating circuit breaker: {str(e)}")
+                        # Create a new circuit breaker entry if needed
+                        self._proxy_state['circuit_breaker'][current_state] = {
+                            'is_open': False,
+                            'reset_timeout': 180,
+                            'last_attempt': time.time(),
+                            'failure_count': 1
+                        }
                     
                     # Increment block count for this specific state
                     self._proxy_state['state_blocks'][current_state] += 1
@@ -444,12 +477,45 @@ class SerpAnalyzer:
                     # Track the block for adaptive rotation
                     self._proxy_state['block_count'] += 1
                     self._proxy_state['last_block_time'] = time.time()
+                    
+                    # Get current state, use a default if None
                     current_state = self._proxy_state['last_state']
+                    if current_state is None:
+                        # Use the first state in the list as default
+                        us_states = list(self._proxy_state['circuit_breaker'].keys())
+                        if us_states:
+                            current_state = us_states[0]
+                            self._proxy_state['last_state'] = current_state
+                        else:
+                            # Fallback to a default state
+                            current_state = "us_default"
+                            self._proxy_state['circuit_breaker'][current_state] = {
+                                'is_open': False,
+                                'reset_timeout': 180,
+                                'last_attempt': time.time(),
+                                'failure_count': 0
+                            }
+                            self._proxy_state['last_state'] = current_state
                     
                     # Update circuit breaker for the current state
-                    circuit = self._proxy_state['circuit_breaker'][current_state]
-                    circuit['failure_count'] += 1
-                    circuit['last_attempt'] = time.time()
+                    try:
+                        circuit = self._proxy_state['circuit_breaker'][current_state]
+                        
+                        # Ensure failure_count exists
+                        if 'failure_count' not in circuit:
+                            circuit['failure_count'] = 0
+                            
+                        circuit['failure_count'] += 1
+                        circuit['last_attempt'] = time.time()
+                    except Exception as e:
+                        print(f"Error updating circuit breaker: {str(e)}")
+                        # Create a new circuit breaker entry if needed
+                        self._proxy_state['circuit_breaker'][current_state] = {
+                            'is_open': False,
+                            'reset_timeout': 180,
+                            'last_attempt': time.time(),
+                            'failure_count': 1
+                        }
                     
                     # Increment block count for this specific state
                     self._proxy_state['state_blocks'][current_state] += 1
@@ -803,8 +869,41 @@ class SerpAnalyzer:
                         self._proxy_state['state_blocks'][current_state] = self._proxy_state['state_blocks'].get(current_state, 0) + 1
                         
                         # Update circuit breaker
-                        circuit = self._proxy_state['circuit_breaker'].get(current_state, {'is_open': False, 'failure_count': 0, 'last_attempt': time.time()})
-                        circuit['failure_count'] = circuit.get('failure_count', 0) + 1
+                        # Make sure current_state is valid
+                        if current_state is None:
+                            # Use a default state if none is set
+                            us_states = list(self._proxy_state['circuit_breaker'].keys())
+                            if us_states:
+                                current_state = us_states[0]
+                                self._proxy_state['current_state'] = current_state
+                            else:
+                                # If no states available, create a default one
+                                current_state = "us_default"
+                                self._proxy_state['circuit_breaker'][current_state] = {
+                                    'is_open': False,
+                                    'reset_timeout': 180,
+                                    'last_attempt': time.time(),
+                                    'failure_count': 0
+                                }
+                                self._proxy_state['current_state'] = current_state
+                        
+                        # Ensure the circuit breaker exists for this state
+                        if current_state not in self._proxy_state['circuit_breaker']:
+                            self._proxy_state['circuit_breaker'][current_state] = {
+                                'is_open': False,
+                                'reset_timeout': 180,
+                                'last_attempt': time.time(),
+                                'failure_count': 0
+                            }
+                        
+                        # Get the circuit breaker and update it
+                        circuit = self._proxy_state['circuit_breaker'][current_state]
+                        
+                        # Ensure failure_count exists
+                        if 'failure_count' not in circuit:
+                            circuit['failure_count'] = 0
+                            
+                        circuit['failure_count'] += 1
                         circuit['last_attempt'] = time.time()
                         
                         # Open circuit breaker if too many failures
@@ -824,8 +923,16 @@ class SerpAnalyzer:
                 
                 # If we got results, reset failure count
                 if search_results and len(search_results) > 0:
-                    if current_state in self._proxy_state['circuit_breaker']:
-                        self._proxy_state['circuit_breaker'][current_state]['failure_count'] = 0
+                    try:
+                        if current_state in self._proxy_state['circuit_breaker']:
+                            # Ensure the circuit breaker has the expected structure
+                            if 'failure_count' not in self._proxy_state['circuit_breaker'][current_state]:
+                                self._proxy_state['circuit_breaker'][current_state]['failure_count'] = 0
+                            else:
+                                self._proxy_state['circuit_breaker'][current_state]['failure_count'] = 0
+                    except Exception as e:
+                        print(f"Error resetting failure count: {str(e)}")
+                        # Non-critical error, continue anyway
                     return search_results
                 else:
                     # Try regex extraction as a last resort
