@@ -138,15 +138,34 @@ class SerpAnalyzer:
             "us_ohio", "us_pennsylvania", "us_new_jersey", "us_minnesota"
         ]
         
-        # Track last used state, time, and block count for adaptive rotation
+        # Track proxy state, block counts, and circuit breaker information
         if not hasattr(self, '_proxy_state'):
             self._proxy_state = {
                 'last_rotation': 0,
                 'last_state': None,
                 'block_count': 0,
                 'last_block_time': 0,
-                'used_states': set()
+                'used_states': set(),
+                'state_blocks': {},       # Track blocks per state
+                'state_delays': {},       # Delay times for each state
+                'circuit_breaker': {},    # Circuit breaker for each state
+                'global_backoff': 1,      # Global backoff multiplier
+                'last_success_time': 0    # Last successful request time
             }
+            
+        # Initialize tracking for each state if not already done
+        for state in us_states:
+            if state not in self._proxy_state['state_blocks']:
+                self._proxy_state['state_blocks'][state] = 0
+            if state not in self._proxy_state['state_delays']:
+                self._proxy_state['state_delays'][state] = 1  # Base delay in seconds
+            if state not in self._proxy_state['circuit_breaker']:
+                self._proxy_state['circuit_breaker'][state] = {
+                    'is_open': False,      # Is circuit open (state blocked)
+                    'failure_count': 0,     # Consecutive failures
+                    'last_attempt': 0,      # Last attempt time
+                    'reset_timeout': 300    # Time to wait before trying again (5 minutes)
+                }
         
         # Determine rotation interval based on block history
         current_time = time.time()
@@ -154,11 +173,21 @@ class SerpAnalyzer:
         # Base rotation interval is 1-2 minutes
         base_interval = random.randint(60, 120)
         
-        # If we've seen blocks recently, reduce the interval
+        # Apply global backoff if we've had many recent failures
+        if self._proxy_state['global_backoff'] > 1:
+            # Gradually reduce global backoff over time
+            time_since_last_block = current_time - self._proxy_state['last_block_time']
+            if time_since_last_block > 600:  # 10 minutes
+                self._proxy_state['global_backoff'] = max(1, self._proxy_state['global_backoff'] * 0.8)
+                print(f"Reducing global backoff to {self._proxy_state['global_backoff']:.2f}")
+        
+        # If we've seen blocks recently, adjust the interval
         if self._proxy_state['block_count'] > 0:
-            # Reset block count after 30 minutes
+            # Reset block count after 30 minutes of no blocks
             if current_time - self._proxy_state['last_block_time'] > 1800:
                 self._proxy_state['block_count'] = 0
+                self._proxy_state['global_backoff'] = 1
+                print("Reset block count and global backoff after 30 minutes of no blocks")
             else:
                 # Exponentially decrease interval based on block count
                 # More blocks = more frequent rotation
@@ -168,16 +197,45 @@ class SerpAnalyzer:
         
         # Check if we need to rotate proxies
         if current_time - self._proxy_state['last_rotation'] > base_interval:
-            # Choose a random state, but avoid recently used ones if possible
-            available_states = [s for s in us_states if s not in self._proxy_state['used_states']]
+            # Filter out states with open circuit breakers
+            working_states = []
+            for state in us_states:
+                circuit = self._proxy_state['circuit_breaker'][state]
+                
+                # Check if circuit is open (state is blocked)
+                if circuit['is_open']:
+                    # Check if it's time to try the state again (circuit half-open)
+                    if current_time - circuit['last_attempt'] > circuit['reset_timeout']:
+                        print(f"Circuit breaker half-open for {state}, will try again")
+                        circuit['is_open'] = False  # Reset to try again
+                    else:
+                        continue  # Skip this state, circuit still open
+                
+                # Add state to working states list
+                working_states.append(state)
             
-            # If all states have been used, reset and use any state
+            # If no working states, reset all circuit breakers as a last resort
+            if not working_states:
+                print("WARNING: All states blocked, resetting all circuit breakers")
+                for state in us_states:
+                    self._proxy_state['circuit_breaker'][state]['is_open'] = False
+                working_states = us_states
+            
+            # Choose a random state, but avoid recently used ones if possible
+            available_states = [s for s in working_states if s not in self._proxy_state['used_states']]
+            
+            # If all states have been used, reset and use any working state
             if not available_states:
                 self._proxy_state['used_states'] = set()
-                available_states = us_states
+                available_states = working_states
             
-            # Select a random state from available ones
-            current_state = random.choice(available_states)
+            # Sort states by their block count and delay factor (prefer less blocked states)
+            available_states.sort(key=lambda s: (self._proxy_state['state_blocks'][s], self._proxy_state['state_delays'][s]))
+            
+            # Select a state with preference for those with fewer blocks
+            # Use the first 3 states with lowest block counts, or all if fewer than 3
+            selection_pool = available_states[:min(3, len(available_states))]
+            current_state = random.choice(selection_pool)
             
             # Update state tracking
             self._proxy_state['last_rotation'] = current_time
@@ -188,7 +246,7 @@ class SerpAnalyzer:
             if len(self._proxy_state['used_states']) > 10:
                 self._proxy_state['used_states'].pop()
                 
-            print(f"Rotating proxy: Switching to US state {current_state}")
+            print(f"Rotating proxy: Switching to US state {current_state} (blocks: {self._proxy_state['state_blocks'][current_state]}, delay: {self._proxy_state['state_delays'][current_state]}s)")
             
         try:
             # Prepare the search URL
@@ -341,7 +399,11 @@ class SerpAnalyzer:
                     "please click here if you are not redirected",
                     "our systems have detected",
                     "enable javascript",
-                    "httpservice/retry"
+                    "httpservice/retry",
+                    "detected unusual activity",
+                    "confirm you're not a robot",
+                    "security check",
+                    "before we continue"
                 ]
                 
                 is_blocked = any(indicator in html_content.lower() for indicator in block_indicators)
@@ -351,25 +413,62 @@ class SerpAnalyzer:
                     # Track the block for adaptive rotation
                     self._proxy_state['block_count'] += 1
                     self._proxy_state['last_block_time'] = time.time()
+                    current_state = self._proxy_state['last_state']
                     
-                    # Immediately rotate to a new state that hasn't been used recently
-                    available_states = [s for s in us_states if s != self._proxy_state['last_state'] and s not in self._proxy_state['used_states']]
+                    # Update circuit breaker for the current state
+                    circuit = self._proxy_state['circuit_breaker'][current_state]
+                    circuit['failure_count'] += 1
+                    circuit['last_attempt'] = time.time()
+                    
+                    # Increment block count for this specific state
+                    self._proxy_state['state_blocks'][current_state] += 1
+                    
+                    # Increase delay factor for this state (exponential backoff)
+                    self._proxy_state['state_delays'][current_state] = min(
+                        120,  # Cap at 2 minutes
+                        self._proxy_state['state_delays'][current_state] * 1.5
+                    )
+                    
+                    # Open circuit breaker if too many consecutive failures
+                    if circuit['failure_count'] >= 3:
+                        circuit['is_open'] = True
+                        circuit['reset_timeout'] = min(1800, 300 * (2 ** (circuit['failure_count'] - 3)))
+                        print(f"Circuit breaker OPEN for {current_state} - too many blocks. Will try again in {circuit['reset_timeout']}s")
+                    
+                    # Increase global backoff factor
+                    self._proxy_state['global_backoff'] = min(8, self._proxy_state['global_backoff'] * 1.5)
+                    
+                    # Find states with closed circuit breakers
+                    available_states = []
+                    for state in us_states:
+                        if state != current_state and not self._proxy_state['circuit_breaker'][state]['is_open']:
+                            available_states.append(state)
+                    
+                    # If no available states, reset circuit breakers as last resort
                     if not available_states:
-                        # If all states have been tried, just pick a random one different from current
-                        available_states = [s for s in us_states if s != self._proxy_state['last_state']]
-                        if not available_states:  # Fallback if somehow we only have one state
-                            available_states = us_states
+                        print("WARNING: All states blocked, resetting least-recently blocked state")
+                        # Find the state with the oldest last_attempt
+                        oldest_state = min(us_states, key=lambda s: self._proxy_state['circuit_breaker'][s]['last_attempt'])
+                        self._proxy_state['circuit_breaker'][oldest_state]['is_open'] = False
+                        available_states = [oldest_state]
                     
-                    # Choose a random state from available ones
-                    new_state = random.choice(available_states)
+                    # Sort by block count and delay (prefer states with fewer blocks)
+                    available_states.sort(key=lambda s: (self._proxy_state['state_blocks'][s], self._proxy_state['state_delays'][s]))
+                    
+                    # Choose from the top 3 least-blocked states
+                    selection_pool = available_states[:min(3, len(available_states))]
+                    new_state = random.choice(selection_pool)
+                    
                     self._proxy_state['last_state'] = new_state
                     self._proxy_state['used_states'].add(new_state)
                     self._proxy_state['last_rotation'] = time.time()
                     
-                    print(f"Immediate proxy rotation due to block: Switching to US state {new_state}")
+                    print(f"Immediate proxy rotation due to block: Switching to US state {new_state} (blocks: {self._proxy_state['state_blocks'][new_state]}, delay: {self._proxy_state['state_delays'][new_state]}s)")
                     
-                    # Wait a bit longer before retrying to avoid rapid-fire requests
-                    backoff_time = random.uniform(2.0, 5.0)
+                    # Calculate backoff time based on global backoff and state-specific delay
+                    backoff_time = random.uniform(2.0, 5.0) * self._proxy_state['global_backoff'] * self._proxy_state['state_delays'][new_state]
+                    backoff_time = min(60, backoff_time)  # Cap at 60 seconds
+                    
                     await asyncio.sleep(backoff_time)
                     print(f"Backing off for {backoff_time:.2f}s before retry")
                     
@@ -380,17 +479,88 @@ class SerpAnalyzer:
             else:
                 print(f"Error from Google: {response.status_code} - {response.reason}")
                     
+                # Check for specific error codes
+                is_rate_limited = response.status_code == 429
+                is_blocked = response.status_code in [403, 429, 503]
+                
                 # Track the error as a potential block
                 self._proxy_state['block_count'] += 1
                 self._proxy_state['last_block_time'] = time.time()
+                current_state = self._proxy_state['last_state']
                 
-                # Immediately rotate to a new state
-                available_states = [s for s in us_states if s != self._proxy_state['last_state']]
-                new_state = random.choice(available_states)
+                # Update circuit breaker for the current state
+                circuit = self._proxy_state['circuit_breaker'][current_state]
+                circuit['failure_count'] += 1
+                circuit['last_attempt'] = time.time()
+                
+                # Increment block count for this specific state
+                self._proxy_state['state_blocks'][current_state] += 1
+                
+                # Handle rate limiting with more aggressive backoff
+                if is_rate_limited:
+                    # Increase delay factor more aggressively for rate limiting
+                    self._proxy_state['state_delays'][current_state] = min(
+                        240,  # Cap at 4 minutes for rate limiting
+                        self._proxy_state['state_delays'][current_state] * 2.0
+                    )
+                    
+                    # Open circuit breaker immediately for rate limiting
+                    circuit['is_open'] = True
+                    circuit['reset_timeout'] = 600  # 10 minutes timeout for rate-limited states
+                    print(f"Circuit breaker OPEN for {current_state} - rate limited (429). Will try again in {circuit['reset_timeout']}s")
+                    
+                    # Increase global backoff factor more aggressively
+                    self._proxy_state['global_backoff'] = min(10, self._proxy_state['global_backoff'] * 2.0)
+                else:
+                    # Normal error handling for other status codes
+                    self._proxy_state['state_delays'][current_state] = min(
+                        120,  # Cap at 2 minutes
+                        self._proxy_state['state_delays'][current_state] * 1.5
+                    )
+                    
+                    # Open circuit breaker if too many consecutive failures
+                    if circuit['failure_count'] >= 3:
+                        circuit['is_open'] = True
+                        circuit['reset_timeout'] = min(1800, 300 * (2 ** (circuit['failure_count'] - 3)))
+                        print(f"Circuit breaker OPEN for {current_state} - too many errors. Will try again in {circuit['reset_timeout']}s")
+                    
+                    # Increase global backoff factor
+                    self._proxy_state['global_backoff'] = min(8, self._proxy_state['global_backoff'] * 1.5)
+                
+                # Find states with closed circuit breakers
+                available_states = []
+                for state in us_states:
+                    if state != current_state and not self._proxy_state['circuit_breaker'][state]['is_open']:
+                        available_states.append(state)
+                
+                # If no available states, reset circuit breakers as last resort
+                if not available_states:
+                    print("WARNING: All states blocked, resetting least-recently blocked state")
+                    # Find the state with the oldest last_attempt
+                    oldest_state = min(us_states, key=lambda s: self._proxy_state['circuit_breaker'][s]['last_attempt'])
+                    self._proxy_state['circuit_breaker'][oldest_state]['is_open'] = False
+                    available_states = [oldest_state]
+                
+                # Sort by block count and delay (prefer states with fewer blocks)
+                available_states.sort(key=lambda s: (self._proxy_state['state_blocks'][s], self._proxy_state['state_delays'][s]))
+                
+                # Choose from the top 3 least-blocked states
+                selection_pool = available_states[:min(3, len(available_states))]
+                new_state = random.choice(selection_pool)
+                
                 self._proxy_state['last_state'] = new_state
+                self._proxy_state['used_states'].add(new_state)
                 self._proxy_state['last_rotation'] = time.time()
                 
-                print(f"Immediate proxy rotation due to error: Switching to US state {new_state}")
+                print(f"Immediate proxy rotation due to error {response.status_code}: Switching to US state {new_state} (blocks: {self._proxy_state['state_blocks'][new_state]}, delay: {self._proxy_state['state_delays'][new_state]}s)")
+                
+                # Calculate backoff time based on global backoff and state-specific delay
+                backoff_base = 5.0 if is_rate_limited else 2.0
+                backoff_time = random.uniform(backoff_base, backoff_base * 2) * self._proxy_state['global_backoff'] * self._proxy_state['state_delays'][new_state]
+                backoff_time = min(120, backoff_time)  # Cap at 2 minutes
+                
+                await asyncio.sleep(backoff_time)
+                print(f"Backing off for {backoff_time:.2f}s before retry")
         
         except Exception as e:
             print(f"Error using direct HTTP request with Oxylabs proxy: {str(e)}")
