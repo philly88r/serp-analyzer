@@ -104,11 +104,14 @@ class SerpAnalyzer:
         Returns:
             list: List of dictionaries containing search results, or empty list if error
         """
+        print(f"\n===== STARTING SEARCH FOR: {query} =====\n")
+        
         # Add US-specific parameters to the search URL
         # gl=us: Sets Google's country to US
         # hl=en: Sets language to English
         # cr=countryUS: Restricts results to US
         search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&cr=countryUS&pws=0"
+        print(f"Search URL: {search_url}")
         
         # If Oxylabs is configured, use it for reliable results
         if OXYLABS_CONFIGURED:
@@ -839,81 +842,98 @@ class SerpAnalyzer:
             print(f"Using proxy with state {current_state} and session {session_id}")
             
             # Use AsyncWebCrawler with the proxy
-            async with AsyncWebCrawler() as crawler:
-                result = await crawler.arun(
-                    search_url,
-                    headless=self.headless,
-                    proxy=proxy_url,
-                    cache_mode="bypass",
-                    wait_until="networkidle",
-                    page_timeout=30000,
-                    delay_before_return_html=0.5,
-                    word_count_threshold=100,
-                    scan_full_page=True,
-                    scroll_delay=0.3,
-                    remove_overlay_elements=True
-                )
+            try:
+                print(f"Starting crawl4ai with timeout...")
+                # Create a timeout for the crawler operation
+                import asyncio
+                async with AsyncWebCrawler() as crawler:
+                    # Create a task for the crawler operation with a timeout
+                    try:
+                        # Set a timeout of 20 seconds for the crawler operation
+                        result = await asyncio.wait_for(
+                            crawler.arun(
+                                search_url,
+                                headless=self.headless,
+                                proxy=proxy_url,
+                                cache_mode="bypass",
+                                wait_until="networkidle",
+                                page_timeout=15000,  # Reduced timeout to 15 seconds
+                                delay_before_return_html=0.5,
+                                word_count_threshold=100,
+                                scan_full_page=True,
+                                scroll_delay=0.3,
+                                remove_overlay_elements=True
+                            ),
+                            timeout=20.0  # 20 second timeout for the entire operation
+                        )
+                        print(f"Crawl4ai completed successfully")
+                    except asyncio.TimeoutError:
+                        print(f"Crawl4ai operation timed out after 20 seconds")
+                        return []
+            except Exception as e:
+                print(f"Error setting up crawl4ai: {str(e)}")
+                return []
+            
+            if not result.success:
+                print(f"Error searching with crawler: {result.error_message}")
                 
-                if not result.success:
-                    print(f"Error searching with crawler: {result.error_message}")
+                # Check if the error indicates a block
+                block_indicators = ["captcha", "unusual traffic", "sorry", "automated", "robot"]
+                is_blocked = any(indicator in result.error_message.lower() for indicator in block_indicators)
+                
+                if is_blocked:
+                    print("Detected block in crawler error message")
+                    # Update block tracking
+                    self._proxy_state['block_count'] = self._proxy_state.get('block_count', 0) + 1
+                    self._proxy_state['last_block_time'] = time.time()
+                    self._proxy_state['state_blocks'][current_state] = self._proxy_state['state_blocks'].get(current_state, 0) + 1
                     
-                    # Check if the error indicates a block
-                    block_indicators = ["captcha", "unusual traffic", "sorry", "automated", "robot"]
-                    is_blocked = any(indicator in result.error_message.lower() for indicator in block_indicators)
-                    
-                    if is_blocked:
-                        print("Detected block in crawler error message")
-                        # Update block tracking
-                        self._proxy_state['block_count'] = self._proxy_state.get('block_count', 0) + 1
-                        self._proxy_state['last_block_time'] = time.time()
-                        self._proxy_state['state_blocks'][current_state] = self._proxy_state['state_blocks'].get(current_state, 0) + 1
-                        
-                        # Update circuit breaker
-                        # Make sure current_state is valid
-                        if current_state is None:
-                            # Use a default state if none is set
-                            us_states = list(self._proxy_state['circuit_breaker'].keys())
-                            if us_states:
-                                current_state = us_states[0]
-                                self._proxy_state['current_state'] = current_state
-                            else:
-                                # If no states available, create a default one
-                                current_state = "us_default"
-                                self._proxy_state['circuit_breaker'][current_state] = {
-                                    'is_open': False,
-                                    'reset_timeout': 180,
-                                    'last_attempt': time.time(),
-                                    'failure_count': 0
-                                }
-                                self._proxy_state['current_state'] = current_state
-                        
-                        # Ensure the circuit breaker exists for this state
-                        if current_state not in self._proxy_state['circuit_breaker']:
+                    # Update circuit breaker
+                    # Make sure current_state is valid
+                    if current_state is None:
+                        # Use a default state if none is set
+                        us_states = list(self._proxy_state['circuit_breaker'].keys())
+                        if us_states:
+                            current_state = us_states[0]
+                            self._proxy_state['current_state'] = current_state
+                        else:
+                            # If no states available, create a default one
+                            current_state = "us_default"
                             self._proxy_state['circuit_breaker'][current_state] = {
                                 'is_open': False,
                                 'reset_timeout': 180,
                                 'last_attempt': time.time(),
                                 'failure_count': 0
                             }
+                            self._proxy_state['current_state'] = current_state
                         
-                        # Get the circuit breaker and update it
-                        circuit = self._proxy_state['circuit_breaker'][current_state]
+                    # Ensure the circuit breaker exists for this state
+                    if current_state not in self._proxy_state['circuit_breaker']:
+                        self._proxy_state['circuit_breaker'][current_state] = {
+                            'is_open': False,
+                            'reset_timeout': 180,
+                            'last_attempt': time.time(),
+                            'failure_count': 0
+                        }
+                    
+                    # Get the circuit breaker and update it
+                    circuit = self._proxy_state['circuit_breaker'][current_state]
+                    
+                    # Ensure failure_count exists
+                    if 'failure_count' not in circuit:
+                        circuit['failure_count'] = 0
                         
-                        # Ensure failure_count exists
-                        if 'failure_count' not in circuit:
-                            circuit['failure_count'] = 0
-                            
-                        circuit['failure_count'] += 1
-                        circuit['last_attempt'] = time.time()
-                        
-                        # Open circuit breaker if too many failures
-                        if circuit['failure_count'] >= 2:
-                            circuit['is_open'] = True
-                            circuit['reset_timeout'] = min(900, 180 * (2 ** (circuit['failure_count'] - 2)))
-                            print(f"Circuit breaker OPEN for {current_state}")
-                        
-                        # Force immediate rotation
-                        self._proxy_state['last_rotation'] = 0
+                    circuit['failure_count'] += 1
+                    circuit['last_attempt'] = time.time()
+                    
+                    # Open circuit breaker if too many failures
+                    if circuit['failure_count'] >= 2:
+                        circuit['is_open'] = True
+                        circuit['reset_timeout'] = min(900, 180 * (2 ** (circuit['failure_count'] - 2)))
+                        print(f"Circuit breaker OPEN for {current_state}")
+                    
+                    # Force immediate rotation
+                    self._proxy_state['last_rotation'] = 0
                     
                     return []
                 
@@ -949,43 +969,60 @@ class SerpAnalyzer:
             print(f"Using direct search method for query: {query}")
             
             # Use AsyncWebCrawler without a proxy
-            async with AsyncWebCrawler() as crawler:
-                # Rotate user agents
-                user_agents = [
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0",
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0"
-                ]
+            try:
+                print(f"Starting direct crawl4ai with timeout...")
+                # Create a timeout for the crawler operation
+                import asyncio
+                async with AsyncWebCrawler() as crawler:
+                    # Rotate user agents
+                    user_agents = [
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0",
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0"
+                    ]
+                    
+                    # Create a task for the crawler operation with a timeout
+                    try:
+                        # Set a timeout of 20 seconds for the crawler operation
+                        result = await asyncio.wait_for(
+                            crawler.arun(
+                                search_url,
+                                headless=self.headless,
+                                user_agent=random.choice(user_agents),
+                                cache_mode="bypass",
+                                wait_until="networkidle",
+                                page_timeout=15000,  # Reduced timeout to 15 seconds
+                                delay_before_return_html=0.5,
+                                word_count_threshold=100,
+                                scan_full_page=True,
+                                scroll_delay=0.3,
+                                remove_overlay_elements=True
+                            ),
+                            timeout=20.0  # 20 second timeout for the entire operation
+                        )
+                        print(f"Direct crawl4ai completed successfully")
+                    except asyncio.TimeoutError:
+                        print(f"Direct crawl4ai operation timed out after 20 seconds")
+                        return []
+            except Exception as e:
+                print(f"Error setting up direct crawl4ai: {str(e)}")
+                return []
                 
-                result = await crawler.arun(
-                    search_url,
-                    headless=self.headless,
-                    user_agent=random.choice(user_agents),
-                    cache_mode="bypass",
-                    wait_until="networkidle",
-                    page_timeout=30000,
-                    delay_before_return_html=0.5,
-                    word_count_threshold=100,
-                    scan_full_page=True,
-                    scroll_delay=0.3,
-                    remove_overlay_elements=True
-                )
-                
-                if not result.success:
-                    print(f"Error searching with direct method: {result.error_message}")
-                    return []
-                
-                # Process the HTML
-                html_content = result.html
-                search_results = await self._process_google_html(html_content, query, num_results)
-                
-                if search_results and len(search_results) > 0:
-                    return search_results
-                else:
-                    # Try regex extraction as a last resort
-                    return await self._extract_results_with_regex(html_content, num_results)
+            if not result.success:
+                print(f"Error searching with direct method: {result.error_message}")
+                return []
+            
+            # Process the HTML
+            html_content = result.html
+            search_results = await self._process_google_html(html_content, query, num_results)
+            
+            if search_results and len(search_results) > 0:
+                return search_results
+            else:
+                # Try regex extraction as a last resort
+                return await self._extract_results_with_regex(html_content, num_results)
         except Exception as e:
             print(f"Error using direct search method: {str(e)}")
             return []
@@ -1128,7 +1165,9 @@ class SerpAnalyzer:
         print(f"\n===== ANALYZING SERP FOR QUERY: {query} =====\n")
         
         # Search Google for the query
+        print(f"Calling search_google with query: {query}, num_results: {num_results}")
         search_results = await self.search_google(query, num_results)
+        print(f"Returned from search_google call")
         
         # Print diagnostic information
         print(f"Search results type: {type(search_results)}")
@@ -1244,18 +1283,39 @@ class SerpAnalyzer:
 
 async def main():
     # Initialize the SERP Analyzer
+    print("Initializing SERP Analyzer...")
     analyzer = SerpAnalyzer(headless=False)  # Set to True for headless mode
     
-    # Get search query from user
-    query = input("Enter your search query: ")
-    num_results = int(input("Number of results to analyze (default 6): ") or "6")
+    # Check for command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='SERP Analyzer Tool')
+    parser.add_argument('query', nargs='?', help='Search query to analyze')
+    parser.add_argument('--results', '-r', type=int, default=6, help='Number of results to analyze (default: 6)')
+    parser.add_argument('--debug', '-d', action='store_true', help='Enable debug mode')
+    args = parser.parse_args()
+    print(f"Command line args: query='{args.query}', results={args.results}, debug={args.debug}")
+    
+    # Get query from command line args or user input
+    query = args.query
+    if not query:
+        query = input("Enter your search query: ")
+    
+    # Get number of results from command line args or user input
+    num_results = args.results
+    if not num_results:
+        num_results = int(input("Number of results to analyze (default 6): ") or "6")
     
     # Perform SERP analysis
+    print(f"Starting SERP analysis for query: {query}")
     serp_analysis = await analyzer.analyze_serp(query, num_results)
+    print(f"SERP analysis completed")
     
     # Save results
+    print(f"Saving results to JSON...")
     analyzer.save_results(serp_analysis, "json")
+    print(f"Saving results to CSV...")
     analyzer.save_results(serp_analysis, "csv")
+    print(f"Results saved")
     
     print("\nAnalysis complete!")
     print(f"Analyzed {len(serp_analysis['results'])} search results for query: {query}")
