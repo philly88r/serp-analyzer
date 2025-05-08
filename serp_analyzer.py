@@ -69,23 +69,45 @@ class SerpAnalyzer:
         search_results = []
         
         # Set the search region to the United States by adding gl=us and hl=en parameters
-        search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en"
+        # Add additional parameters to make the request look more natural
+        search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&pws=0&safe=off"
         print(f"Searching Google for: {query}")
         
-        # Configure browser options
+        # List of common user agents to rotate through
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36"
+        ]
+        
+        import random
+        import time
+        
+        # Configure browser options with anti-bot detection improvements
         browser_options = {
             "headless": self.headless,
-            # Remove verbose from here as it's likely included in the config
             "cache_mode": "bypass",
             "wait_until": "networkidle",
-            "page_timeout": 60000,  # Increased timeout for slower connections
-            "delay_before_return_html": 1.0,  # Increased delay for better rendering
+            "page_timeout": 90000,  # Increased timeout for slower connections
+            "delay_before_return_html": 2.0,  # Increased delay for better rendering
             "word_count_threshold": 100,
             "scan_full_page": True,
-            "scroll_delay": 0.5,
+            "scroll_delay": random.uniform(0.7, 1.5),  # Randomized scroll delay for more human-like behavior
             "process_iframes": False,
             "remove_overlay_elements": True,
-            "magic": True
+            "magic": True,
+            "user_agent": random.choice(user_agents),  # Use a random user agent
+            "extra_headers": {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Referer": "https://www.google.com/",
+                "DNT": "1"
+            },
+            "viewport": {
+                "width": random.choice([1366, 1440, 1536, 1920]),  # Random common screen width
+                "height": random.choice([768, 900, 1080])  # Random common screen height
+            }
         }
         
         # Add Heroku-specific options
@@ -138,6 +160,24 @@ class SerpAnalyzer:
             # Parse the HTML with BeautifulSoup
             soup = BeautifulSoup(result.html, 'html.parser')
             
+            # Save the HTML for debugging (only in development)
+            if not self.is_heroku:
+                debug_dir = os.path.join(os.getcwd(), 'debug')
+                os.makedirs(debug_dir, exist_ok=True)
+                with open(os.path.join(debug_dir, f'google_search_{query.replace(" ", "_")}.html'), 'w', encoding='utf-8') as f:
+                    f.write(result.html)
+                print(f"Saved HTML response for debugging")
+            
+            # Add debug info - print a small sample of the HTML to see what we're getting
+            html_preview = result.html[:500] + "..." if len(result.html) > 500 else result.html
+            print(f"HTML preview: {html_preview}")
+            
+            # Check for common Google blocks or CAPTCHAs
+            if "Our systems have detected unusual traffic" in result.html:
+                print("DETECTED: Google CAPTCHA page - we're being blocked")
+            if "sorry..." in result.html.lower() and "page you requested was not found" in result.html.lower():
+                print("DETECTED: Google error page")
+                
             # Try different selectors to find search results
             # Google's HTML structure changes frequently, so we need to try multiple selectors
             selectors = [
@@ -149,7 +189,15 @@ class SerpAnalyzer:
                 "div.g div.rc",
                 "div.jtfYYd",
                 "div.MjjYud",
-                "div.v7W49e"
+                "div.v7W49e",
+                "div.Gx5Zad",
+                "div.egMi0",
+                "div.BYM4Nd",
+                "div.ULSxyf",
+                "div.hlcw0c",
+                "div.g div",  # More generic fallback
+                "[data-header-feature]",
+                "[data-content-feature]"
             ]
             
             # Try each selector until we find results
@@ -175,27 +223,84 @@ class SerpAnalyzer:
                                 break
                             parent = parent.parent if parent else None
             
+            # If still no results, try to find any links on the page
+            if not result_elements:
+                print("No results found with standard selectors, looking for any links...")
+                links = soup.select("a[href^='http']")  # Links that start with http
+                if links:
+                    print(f"Found {len(links)} links on the page")
+                    # Filter out Google's own links
+                    external_links = [link for link in links if not "google.com" in link['href']]
+                    print(f"Found {len(external_links)} external links")
+                    
+                    # Create simple result elements from these links
+                    for link in external_links[:num_results]:
+                        title = link.get_text().strip() or link['href']
+                        result_elements.append({
+                            'title': title,
+                            'url': link['href'],
+                            'is_direct_link': True  # Flag to handle differently in the processing below
+                        })
+            
             for element in result_elements:
                 try:
+                    # Check if this is a direct link from our fallback method
+                    if isinstance(element, dict) and element.get('is_direct_link'):
+                        search_results.append({
+                            'title': element.get('title', 'Unknown Title'),
+                            'url': element.get('url', ''),
+                            'snippet': 'No snippet available (direct link extraction)'
+                        })
+                        continue
+                    
                     # Extract title, URL, and snippet
                     title_element = element.select_one("h3")
                     link_element = element.select_one("a")
-                    snippet_element = element.select_one("div[data-sncf='1']") or element.select_one("div.VwiC3b")
                     
-                    if title_element and link_element and "href" in link_element.attrs:
+                    # Try multiple snippet selectors
+                    snippet_selectors = ["div.VwiC3b", "span.aCOpRe", "div.lyLwlc", "div[data-content-feature='1']", "div.s3v9rd", "div.lEBKkf"]
+                    snippet_element = None
+                    for selector in snippet_selectors:
+                        snippet_element = element.select_one(selector)
+                        if snippet_element:
+                            break
+                    
+                    # If we couldn't find a title element but there's a link with text, use that
+                    if not title_element and link_element and link_element.get_text().strip():
+                        title = link_element.get_text().strip()
+                    elif title_element:
                         title = title_element.get_text().strip()
-                        url = link_element["href"]
-                        snippet = snippet_element.get_text().strip() if snippet_element else ""
+                    else:
+                        title = "Unknown Title"
+                    
+                    # Get URL
+                    url = ''
+                    if link_element:
+                        url = link_element.get('href', '')
                         
-                        # Only include results with valid URLs (skip Google's internal links)
-                        if url.startswith("http") and "google.com" not in url:
-                            search_results.append({
-                                "title": title,
-                                "url": url,
-                                "snippet": snippet
-                            })
-                except Exception as extract_error:
-                    print(f"Error extracting search result: {str(extract_error)}")
+                        # Clean up the URL if it's a Google redirect
+                        if url.startswith('/url?'):
+                            url = url.split('&sa=')[0].replace('/url?q=', '')
+                            url = unquote(url)  # Decode URL-encoded characters
+                    
+                    # Get snippet if available
+                    snippet = ""
+                    if snippet_element:
+                        snippet = snippet_element.get_text().strip()
+                    
+                    # Only add if we have at least a URL
+                    if url:
+                        # Add to results
+                        search_results.append({
+                            'title': title,
+                            'url': url,
+                            'snippet': snippet
+                        })
+                        
+                        if len(search_results) >= num_results:
+                            break
+                except Exception as e:
+                    print(f"Error extracting search result: {str(e)}")
                     continue
             
             print(f"Found {len(search_results)} search results")
