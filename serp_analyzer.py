@@ -53,23 +53,16 @@ class SerpAnalyzer:
         """
         self.headless = headless
         
-        # Check if we're running on Heroku or Render
         self.is_heroku = 'DYNO' in os.environ
         self.is_render = 'RENDER' in os.environ
         print(f"Running on Heroku: {self.is_heroku}, Running on Render: {self.is_render}")
         
-        # Create a directory for browser cache if it doesn't exist
         self.browser_cache_dir = os.path.join(os.getcwd(), '.browser_cache')
         os.makedirs(self.browser_cache_dir, exist_ok=True)
-        
-        # Create necessary directories
         os.makedirs("results", exist_ok=True)
         
-        # Initialize proxy rotation variables
-        self._last_state_index = 0
-        
-        # Initialize proxy state tracking
-        us_states = [
+        # Define US states for proxy rotation as an instance attribute
+        self.us_states = [
             "us_florida", "us_california", "us_massachusetts", "us_north_carolina", 
             "us_south_carolina", "us_nevada", "us_new_york", "us_texas", 
             "us_washington", "us_illinois", "us_arizona", "us_colorado",
@@ -77,20 +70,21 @@ class SerpAnalyzer:
             "us_virginia", "us_new_jersey", "us_minnesota", "us_oregon"
         ]
         
-        # Initialize proxy state tracking dictionary with more aggressive rotation
+        # Initialize proxy state tracking dictionary
         self._proxy_state = {
             'last_state': None,
-            'used_states': set(),
-            'state_blocks': {state: 0 for state in us_states},
-            'state_delays': {state: 1 for state in us_states},  # Default 1 second delay
-            'circuit_breaker': {state: {'is_open': False, 'reset_timeout': 180, 'last_attempt': time.time(), 'failure_count': 0} for state in us_states},
-            'rotation_interval': 60,  # 1 minute default (more aggressive)
-            'last_rotation_time': time.time(),
-            'last_rotation': time.time(),  # For compatibility with existing code
-            'consecutive_blocks': 0,
+            'last_used_proxy_index': -1, # Start before the first state
+            'used_states': set(), # Not currently used by _rotate_proxy_if_needed, but good to keep
+            'state_blocks': {state: 0 for state in self.us_states}, # Not currently used by _rotate_proxy_if_needed
+            'state_delays': {state: 1 for state in self.us_states},  # Not currently used by _rotate_proxy_if_needed
+            'circuits': {state: {'is_open': False, 'failure_count': 0, 'last_failure_time': 0, 'reset_timeout': 180} for state in self.us_states},
+            'rotation_interval': 60,  # Base interval in seconds
+            'last_rotation_time': 0, # Initialize to 0 to ensure first rotation happens
+            'last_rotation': 0,  # For compatibility with existing code
+            'consecutive_blocks': 0, # Not currently used by _rotate_proxy_if_needed
             'global_backoff': 1,  # Global backoff multiplier
-            'block_count': 0,  # Count of recent blocks
-            'last_block_time': time.time()  # Time of the last block
+            'block_count': 0,  # Count of recent blocks, used by _rotate_proxy_if_needed
+            'last_block_time': 0  # Time of the last block, initialize to 0
         }
     
     async def search_google(self, query, num_results=6):
@@ -105,35 +99,53 @@ class SerpAnalyzer:
             list: List of dictionaries containing search results, or empty list if error
         """
         print(f"\n===== STARTING SEARCH FOR: {query} =====\n")
+        print(f"DEBUG: search_google initiated for query: '{query}'") # DEBUG
         
-        # Add US-specific parameters to the search URL
-        # gl=us: Sets Google's country to US
-        # hl=en: Sets language to English
-        # cr=countryUS: Restricts results to US
         search_url = f"https://www.google.com/search?q={quote_plus(query)}&gl=us&hl=en&cr=countryUS&pws=0"
         print(f"Search URL: {search_url}")
         
-        # If Oxylabs is configured, use it for reliable results
+        all_methods_tried = False
+        results = [] # Initialize results as an empty list
+
         if OXYLABS_CONFIGURED:
+            print("DEBUG: OXYLABS_CONFIGURED is True. Trying Oxylabs methods.") # DEBUG
             print("Using Oxylabs for reliable Google search results")
             
-            # Try the direct HTTP method first (most reliable)
-            print("Trying direct HTTP method with Oxylabs proxy")
+            print("DEBUG: Attempting _search_with_oxylabs_direct_http") # DEBUG
             results = await self._search_with_oxylabs_direct_http(query, num_results)
+            print(f"DEBUG: _search_with_oxylabs_direct_http returned: {len(results) if results else 'None' } results.") # DEBUG
             
-            # If we got results, return them
             if results and len(results) > 0:
-                print(f"Found {len(results)} results with direct HTTP method")
+                print(f"Found {len(results)} results with Oxylabs direct HTTP method")
                 return results
             
-            # If direct HTTP failed, try the proxy method with crawler
-            print("Direct HTTP method failed, trying Oxylabs proxy with crawler")
-            return await self._search_with_oxylabs_proxy(query, search_url, num_results)
+            print("DEBUG: Oxylabs direct HTTP failed. Attempting _search_with_oxylabs_proxy (crawler)") # DEBUG
+            results = await self._search_with_oxylabs_proxy(query, search_url, num_results)
+            print(f"DEBUG: _search_with_oxylabs_proxy returned: {len(results) if results else 'None'} results.") # DEBUG
+
+            if results and len(results) > 0:
+                print(f"Found {len(results)} results with Oxylabs proxy crawler")
+                return results
+            
+            all_methods_tried = True
+            print("DEBUG: Both Oxylabs methods failed or returned no results.") # DEBUG
         
-        # If Oxylabs is not configured, use the direct method with anti-bot measures
-        print("Using direct search method with anti-bot measures")
-        return await self._direct_search_google(query, search_url, num_results)
+        else: # DEBUG
+            print("DEBUG: OXYLABS_CONFIGURED is False.") # DEBUG
+
+        # Always try direct search as a fallback, regardless of whether Oxylabs was tried
+        print("DEBUG: Attempting _direct_search_google as fallback.") # DEBUG
+        results = await self._direct_search_google(query, search_url, num_results)
+        print(f"DEBUG: _direct_search_google returned: {len(results) if results else 'None'} results.") # DEBUG
         
+        if results and len(results) > 0:
+            print(f"Found {len(results)} results with direct search method")
+            return results
+        
+        print("DEBUG: All search methods attempted and failed to yield results.") # DEBUG
+        print("All search methods failed. Please try again later or with a different query.")
+        return []
+
     async def _search_with_oxylabs_direct_http(self, query, num_results=6):
         """
         Search Google using direct HTTP requests with Oxylabs proxy
@@ -153,8 +165,8 @@ class SerpAnalyzer:
         # Determine rotation interval based on block history
         current_time = time.time()
         
-        # More aggressive rotation: 30-60 seconds instead of 1-2 minutes
-        base_interval = random.randint(30, 60)
+        # Moderate rotation: 45-75 seconds
+        base_interval = random.randint(45, 75)
         
         # Apply global backoff if we've had many recent failures
         if self._proxy_state['global_backoff'] > 1:
@@ -182,13 +194,13 @@ class SerpAnalyzer:
         if current_time - self._proxy_state['last_rotation'] > base_interval:
             # Filter out states with open circuit breakers
             working_states = []
-            for state in us_states:
-                circuit = self._proxy_state['circuit_breaker'][state]
+            for state in self.us_states: # Use self.us_states instead of us_states
+                circuit = self._proxy_state['circuits'][state] # Use 'circuits' instead of 'circuit_breaker'
                 
                 # Check if circuit is open (state is blocked)
                 if circuit['is_open']:
                     # Check if it's time to try the state again (circuit half-open)
-                    if current_time - circuit['last_attempt'] > circuit['reset_timeout']:
+                    if current_time - circuit['last_failure_time'] > circuit['reset_timeout']: # Use 'last_failure_time' instead of 'last_attempt'
                         print(f"Circuit breaker half-open for {state}, will try again")
                         circuit['is_open'] = False  # Reset to try again
                     else:
@@ -266,37 +278,14 @@ class SerpAnalyzer:
                 "https": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}"
             }
                 
-            # Rotate user agents with more modern browser signatures
-            user_agents = [
-                # Chrome on Windows
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-                # Chrome on macOS
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
-                # Edge on Windows
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36 Edg/112.0.1722.58",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.35",
-                # Firefox on Windows
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0",
-                # Firefox on macOS
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/113.0",
-                # Safari on macOS
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15"
-            ]
-            
             # Add request throttling to avoid triggering Google's rate limiting
             # Wait a small random time before making the request
             throttle_time = random.uniform(0.5, 2.0)
             await asyncio.sleep(throttle_time)
             print(f"Request throttling: Waited {throttle_time:.2f}s before making request")
             
-            # Set up headers to look like a real browser with more human-like parameters
-            selected_user_agent = random.choice(user_agents)
+            # Get a random user agent
+            selected_user_agent = self._get_random_user_agent()
             
             # Create more realistic headers based on the selected user agent
             is_chrome = "Chrome" in selected_user_agent
@@ -527,7 +516,7 @@ class SerpAnalyzer:
                     if circuit['failure_count'] >= 2:
                         circuit['is_open'] = True
                         circuit['reset_timeout'] = min(900, 180 * (2 ** (circuit['failure_count'] - 2)))
-                        print(f"Circuit breaker OPEN for {current_state} - too many blocks. Will try again in {circuit['reset_timeout']}s")
+                        print(f"Circuit breaker OPEN for {current_state}")
                     
                     # Force immediate proxy rotation
                     self._proxy_state['last_rotation'] = 0
@@ -593,6 +582,7 @@ class SerpAnalyzer:
         Returns:
             list: List of dictionaries containing search results
         """
+        print(f"DEBUG: _process_google_html called for query: '{query}'. HTML snippet (first 500 chars): {html[:500] if html else 'None'}") # DEBUG
         search_results = []
         
         try:
@@ -794,203 +784,264 @@ class SerpAnalyzer:
         """
         Search Google using Oxylabs proxy with crawl4ai browser automation
         """
+        print(f"DEBUG: _search_with_oxylabs_proxy TOP for query: '{query}'") # Initial Entry Log
+        current_state = None
+        proxy_config = None
+        circuit = None
         try:
-            print(f"Using Oxylabs proxy with crawler for query: {query}")
-            
-            # Determine which US state to use based on our rotation strategy
-            current_time = time.time()
-            current_state = self._proxy_state.get('current_state')
-            
-            # If we need to rotate or don't have a current state, choose a new one
-            if not current_state or current_time - self._proxy_state['last_rotation'] > self._proxy_state['rotation_interval']:
-                # Use the same logic as in _search_with_oxylabs_direct_http
-                us_states = [
-                    "us_florida", "us_california", "us_massachusetts", "us_north_carolina", 
-                    "us_south_carolina", "us_nevada", "us_new_york", "us_texas", 
-                    "us_illinois", "us_washington", "us_colorado", "us_arizona", 
-                    "us_oregon", "us_virginia", "us_georgia", "us_michigan", 
-                    "us_ohio", "us_pennsylvania", "us_new_jersey", "us_minnesota"
-                ]
-                
-                # Filter out states with open circuit breakers
-                working_states = [s for s in us_states if not self._proxy_state['circuit_breaker'].get(s, {}).get('is_open', False)]
-                
-                # If no working states, reset all circuit breakers
-                if not working_states:
-                    for state in us_states:
-                        self._proxy_state['circuit_breaker'][state] = {'is_open': False, 'failure_count': 0, 'last_attempt': time.time()}
-                    working_states = us_states
-                
-                # Sort by block count and choose from the best options
-                working_states.sort(key=lambda s: self._proxy_state['state_blocks'].get(s, 0))
-                selection_pool = working_states[:min(3, len(working_states))]
-                current_state = random.choice(selection_pool)
-                
-                # Update state tracking
-                self._proxy_state['last_rotation'] = current_time
-                self._proxy_state['current_state'] = current_state
-                
-                print(f"Rotating proxy for crawler: Using {current_state}")
-            
-            # Generate a unique session ID
-            session_id = random.randint(10000, 99999)
-            
-            # Set up the proxy with enhanced authentication
-            proxy_username = f"{OXYLABS_USERNAME}-st-{current_state}-sessid-{session_id}-sesstime-3"
-            proxy_url = f"http://{proxy_username}:{OXYLABS_PASSWORD}@pr.oxylabs.io:7777"
-            
-            print(f"Using proxy with state {current_state} and session {session_id}")
-            
-            # Use AsyncWebCrawler with the proxy
-            try:
-                print(f"Starting crawl4ai with timeout...")
-                # Create a timeout for the crawler operation
-                import asyncio
-                async with AsyncWebCrawler() as crawler:
-                    # Create a task for the crawler operation with a timeout
-                    try:
-                        # Set a timeout of 20 seconds for the crawler operation
-                        result = await asyncio.wait_for(
-                            crawler.arun(
-                                search_url,
-                                headless=self.headless,
-                                proxy=proxy_url,
-                                cache_mode="bypass",
-                                wait_until="networkidle",
-                                page_timeout=15000,  # Reduced timeout to 15 seconds
-                                delay_before_return_html=0.5,
-                                word_count_threshold=100,
-                                scan_full_page=True,
-                                scroll_delay=0.3,
-                                remove_overlay_elements=True
-                            ),
-                            timeout=20.0  # 20 second timeout for the entire operation
-                        )
-                        print(f"Crawl4ai completed successfully")
-                    except asyncio.TimeoutError:
-                        print(f"Crawl4ai operation timed out after 20 seconds")
-                        return []
-            except Exception as e:
-                print(f"Error setting up crawl4ai: {str(e)}")
+            print(f"DEBUG: Attempting proxy selection and config for query: '{query}'") # DEBUG
+            current_state = self._rotate_proxy_if_needed(force_rotation=False)
+            if not current_state:
+                print("DEBUG: _rotate_proxy_if_needed returned no state. Exiting _search_with_oxylabs_proxy.") # DEBUG
                 return []
+            print(f"DEBUG: current_state selected: {current_state}") # DEBUG
+
+            proxy_config = self._get_proxy_config(current_state)
+            if not proxy_config:
+                print(f"DEBUG: _get_proxy_config failed for state {current_state}. Exiting _search_with_oxylabs_proxy.") # DEBUG
+                return []
+            print(f"DEBUG: proxy_config obtained: {proxy_config.get('proxy_url')[:30]}...") # DEBUG
             
-            if not result.success:
-                print(f"Error searching with crawler: {result.error_message}")
-                
-                # Check if the error indicates a block
-                block_indicators = ["captcha", "unusual traffic", "sorry", "automated", "robot"]
-                is_blocked = any(indicator in result.error_message.lower() for indicator in block_indicators)
-                
-                if is_blocked:
-                    print("Detected block in crawler error message")
-                    # Update block tracking
-                    self._proxy_state['block_count'] = self._proxy_state.get('block_count', 0) + 1
+            circuit = self._proxy_state['circuits'].get(current_state)
+            print(f"DEBUG: Circuit for {current_state}: {'Exists' if circuit else 'Not Found'}") # DEBUG
+            if circuit and circuit['is_open'] and time.time() < circuit['last_failure_time'] + circuit['reset_timeout']:
+                print(f"Circuit breaker OPEN for {current_state}. Skipping proxy.")
+                return []
+            print(f"DEBUG: Proxy setup complete for {current_state}. Proceeding to crawl.") # DEBUG
+
+        except Exception as e_init:
+            print(f"CRITICAL ERROR during proxy setup in _search_with_oxylabs_proxy: {str(e_init)}")
+            import traceback
+            traceback.print_exc() # Print full traceback for setup errors
+            return []
+
+        # Remainder of the method starts here, using current_state, proxy_config, circuit
+        print(f"Using Oxylabs proxy with crawler: {current_state} (Session: {proxy_config['session_id'] if proxy_config else 'N/A'})")
+        
+        result_obj = None # For storing the result from crawler.arun()
+        try:
+            async with AsyncWebCrawler(proxy=proxy_config['proxy_url']) as crawler:
+                print(f"DEBUG: AsyncWebCrawler (proxy) initialized. Proxy: {proxy_config['proxy_url']}") # DEBUG
+                try:
+                    print(f"DEBUG: Starting Oxylabs proxy crawl4ai with timeout...") # DEBUG
+                    result_obj = await asyncio.wait_for(
+                        crawler.arun(
+                            search_url,
+                            headless=self.headless,
+                            user_agent=self._get_random_user_agent(),
+                            cache_mode="bypass",
+                            wait_until="networkidle",
+                            page_timeout=20000, # Increased page timeout to 20s
+                            delay_before_return_html=1.0, # Increased delay to 1s
+                            word_count_threshold=100,
+                            scan_full_page=True,
+                            scroll_delay=0.5,
+                            remove_overlay_elements=True
+                        ),
+                        timeout=30.0  # Overall timeout 30s
+                    )
+                    print(f"DEBUG: Oxylabs proxy crawl4ai completed.") # DEBUG
+                except asyncio.TimeoutError:
+                    print(f"Oxylabs proxy crawl4ai operation timed out after 30 seconds for {current_state}")
+                    if circuit: circuit['failure_count'] += 1
+                    self._proxy_state['block_count'] += 1
                     self._proxy_state['last_block_time'] = time.time()
-                    self._proxy_state['state_blocks'][current_state] = self._proxy_state['state_blocks'].get(current_state, 0) + 1
+                    self._proxy_state['global_backoff'] = min(10, self._proxy_state['global_backoff'] * 1.5)
+                    return []
+                except Exception as e:
+                    print(f"Error during Oxylabs proxy crawl4ai operation for {current_state}: {str(e)}")
+                    if circuit: circuit['failure_count'] += 1
+                    return []
+
+            # DEBUG: Inspect the result_obj from crawler.arun()
+            if result_obj:
+                print(f"DEBUG (proxy crawler): result_obj.success: {result_obj.success}")
+                print(f"DEBUG (proxy crawler): result_obj.error_message: {result_obj.error_message if hasattr(result_obj, 'error_message') else 'No error message'}")
+                print(f"DEBUG (proxy crawler): result_obj.status_code: {result_obj.status_code if hasattr(result_obj, 'status_code') else 'No status code'}")
+                
+                # Check if result_obj has html attribute
+                if hasattr(result_obj, 'html') and result_obj.html:
+                    html_snippet = result_obj.html[:500]
+                    print(f"DEBUG (proxy crawler): result_obj.html snippet length: {len(result_obj.html)}")
+                    print(f"DEBUG (proxy crawler): result_obj.html snippet: {html_snippet}")
                     
-                    # Update circuit breaker
-                    # Make sure current_state is valid
-                    if current_state is None:
-                        # Use a default state if none is set
-                        us_states = list(self._proxy_state['circuit_breaker'].keys())
-                        if us_states:
-                            current_state = us_states[0]
-                            self._proxy_state['current_state'] = current_state
-                        else:
-                            # If no states available, create a default one
-                            current_state = "us_default"
-                            self._proxy_state['circuit_breaker'][current_state] = {
-                                'is_open': False,
-                                'reset_timeout': 180,
-                                'last_attempt': time.time(),
-                                'failure_count': 0
-                            }
-                            self._proxy_state['current_state'] = current_state
-                        
-                    # Ensure the circuit breaker exists for this state
-                    if current_state not in self._proxy_state['circuit_breaker']:
-                        self._proxy_state['circuit_breaker'][current_state] = {
-                            'is_open': False,
-                            'reset_timeout': 180,
-                            'last_attempt': time.time(),
-                            'failure_count': 0
-                        }
-                    
-                    # Get the circuit breaker and update it
-                    circuit = self._proxy_state['circuit_breaker'][current_state]
-                    
-                    # Ensure failure_count exists
-                    if 'failure_count' not in circuit:
-                        circuit['failure_count'] = 0
-                        
+                    # Check for CAPTCHA or block indicators in the HTML
+                    block_indicators = [
+                        "captcha", "unusual traffic", "sorry", "automated", "robot", 
+                        "security check", "confirm you're not a robot", "detected unusual activity"
+                    ]
+                    is_blocked = any(indicator in result_obj.html.lower() for indicator in block_indicators)
+                    if is_blocked:
+                        print(f"DEBUG (proxy crawler): CAPTCHA or block detected in HTML content")
+                else:
+                    print("DEBUG (proxy crawler): result_obj.html is None or not available")
+            else:
+                print("DEBUG (proxy crawler): result_obj is None after crawl.")
+                if circuit: circuit['failure_count'] += 1 # Count as failure if result_obj is None
+                return []
+
+            if not result_obj.success:
+                print(f"Error searching with Oxylabs proxy crawler ({current_state}): {result_obj.error_message}")
+                if circuit: 
                     circuit['failure_count'] += 1
-                    circuit['last_attempt'] = time.time()
-                    
-                    # Open circuit breaker if too many failures
+                    circuit['last_failure_time'] = time.time()
+                    if "captcha" in str(result_obj.error_message).lower() or "block" in str(result_obj.error_message).lower() or (result_obj.status_code and result_obj.status_code == 403):
+                        print(f"CAPTCHA or block detected for {current_state}. Incrementing failure count aggressively.")
+                        circuit['failure_count'] = max(circuit['failure_count'], 2) # Treat as major failure
+                        self._proxy_state['block_count'] += 1
+                        self._proxy_state['last_block_time'] = time.time()
+                        self._proxy_state['global_backoff'] = min(10, self._proxy_state['global_backoff'] * 2)
+                        # Force immediate proxy rotation on next suitable call
+                        self._proxy_state['last_rotation'] = 0 
+
                     if circuit['failure_count'] >= 2:
                         circuit['is_open'] = True
                         circuit['reset_timeout'] = min(900, 180 * (2 ** (circuit['failure_count'] - 2)))
                         print(f"Circuit breaker OPEN for {current_state}")
-                    
-                    # Force immediate rotation
-                    self._proxy_state['last_rotation'] = 0
-                    
-                    return []
-                
-                # Process the HTML
-                html_content = result.html
-                search_results = await self._process_google_html(html_content, query, num_results)
-                
-                # If we got results, reset failure count
-                if search_results and len(search_results) > 0:
-                    try:
-                        if current_state in self._proxy_state['circuit_breaker']:
-                            # Ensure the circuit breaker has the expected structure
-                            if 'failure_count' not in self._proxy_state['circuit_breaker'][current_state]:
-                                self._proxy_state['circuit_breaker'][current_state]['failure_count'] = 0
-                            else:
-                                self._proxy_state['circuit_breaker'][current_state]['failure_count'] = 0
-                    except Exception as e:
-                        print(f"Error resetting failure count: {str(e)}")
-                        # Non-critical error, continue anyway
-                    return search_results
-                else:
-                    # Try regex extraction as a last resort
-                    return await self._extract_results_with_regex(html_content, num_results)
-        except Exception as e:
-            print(f"Error using Oxylabs proxy with crawler: {str(e)}")
-            return []
+                return []
             
+            if circuit: # Reset failure count on success
+                circuit['failure_count'] = 0
+                circuit['is_open'] = False 
+                print(f"Successful crawl with {current_state}, circuit breaker reset.")
+
+            html_content = result_obj.html
+            search_results = await self._process_google_html(html_content, query, num_results)
+            
+            if search_results and len(search_results) > 0:
+                return search_results
+            else:
+                # Try regex extraction as a last resort if HTML processing yields no results
+                return await self._extract_results_with_regex(html_content, num_results)
+                
+        except Exception as e:
+            print(f"Overall error in _search_with_oxylabs_proxy ({current_state}): {str(e)}")
+            if circuit: circuit['failure_count'] += 1
+            return []
+
+    def _get_proxy_config(self, state):
+        """
+        Generate proxy configuration for a given state.
+        Returns a dictionary with proxy_url and session_id.
+        """
+        if not state or not OXYLABS_CONFIGURED:
+            return None
+            
+        # Generate a unique session ID for this request
+        session_id = random.randint(10000, 99999)
+        
+        # Set up the proxy with enhanced authentication
+        # Format: username-country-state-session_id-session_duration
+        proxy_username = f"{OXYLABS_USERNAME}-st-{state}-sessid-{session_id}-sesstime-3"
+        proxy_url = f"http://{proxy_username}:{OXYLABS_PASSWORD}@pr.oxylabs.io:7777"
+        
+        return {
+            'proxy_url': proxy_url,
+            'session_id': session_id,
+            'state': state
+        }
+        
+    def _rotate_proxy_if_needed(self, force_rotation=False):
+        """
+        Determine if proxy rotation is needed and select the next proxy state.
+        Manages rotation intervals, block counts, and circuit breakers.
+        Returns the selected proxy state (e.g., 'us_florida') or None if no suitable proxy is found.
+        """
+        current_time = time.time()
+        
+        # Define the list of US states for proxy rotation
+        # This should ideally be part of self._proxy_state initialization or a class constant
+        us_states = [
+            "us_florida", "us_california", "us_massachusetts", "us_north_carolina",
+            "us_south_carolina", "us_nevada", "us_new_york", "us_texas",
+            "us_illinois", "us_washington", "us_arizona", "us_colorado",
+            "us_georgia", "us_michigan", "us_ohio", "us_pennsylvania",
+            "us_virginia", "us_new_jersey", "us_minnesota", "us_oregon"
+        ]
+        
+        # Initialize 'circuits' and 'last_used_proxy_index' if they don't exist
+        if 'circuits' not in self._proxy_state:
+            self._proxy_state['circuits'] = {state: {'is_open': False, 'failure_count': 0, 'last_failure_time': 0, 'reset_timeout': 180} for state in us_states}
+        if 'last_used_proxy_index' not in self._proxy_state:
+            self._proxy_state['last_used_proxy_index'] = -1 # Start before the first state
+
+        rotation_interval = self._proxy_state.get('rotation_interval', 60) 
+        # Adjust interval based on global backoff and recent blocks
+        effective_interval = rotation_interval * self._proxy_state.get('global_backoff', 1)
+        if self._proxy_state.get('block_count', 0) > 2:
+             # Reduce interval significantly if many blocks
+            effective_interval = min(effective_interval, random.randint(15, 45)) 
+        
+        time_since_last_rotation = current_time - self._proxy_state.get('last_rotation_time', 0)
+        
+        if not force_rotation and time_since_last_rotation < effective_interval:
+            # No rotation needed, return current state if valid
+            last_state = self._proxy_state.get('last_state')
+            if last_state and self._proxy_state['circuits'].get(last_state, {}).get('is_open', False) == False:
+                # print(f"DEBUG: No rotation needed. Using last state: {last_state}")
+                return last_state
+            # If last state is invalid or circuit is open, force rotation
+            # print(f"DEBUG: Last state '{last_state}' invalid or circuit open. Forcing rotation.")
+            force_rotation = True 
+
+        # Attempt to find the next available proxy
+        for _ in range(len(us_states) + 1): # Iterate through states, plus one to try resetting if all fail
+            self._proxy_state['last_used_proxy_index'] = (self._proxy_state['last_used_proxy_index'] + 1) % len(us_states)
+            next_state = us_states[self._proxy_state['last_used_proxy_index']]
+            
+            circuit = self._proxy_state['circuits'].get(next_state)
+            if not circuit: # Initialize if missing (should not happen with proper init)
+                self._proxy_state['circuits'][next_state] = {'is_open': False, 'failure_count': 0, 'last_failure_time': 0, 'reset_timeout': 180}
+                circuit = self._proxy_state['circuits'][next_state]
+
+            if circuit['is_open']:
+                if current_time > circuit.get('last_failure_time', 0) + circuit.get('reset_timeout', 180):
+                    print(f"Circuit breaker for {next_state} has reset. Trying again.")
+                    circuit['is_open'] = False
+                    circuit['failure_count'] = 0
+                else:
+                    # print(f"DEBUG: Skipping {next_state}, circuit breaker is open.")
+                    continue # Skip this state, try next
+            
+            # This state is available
+            print(f"DEBUG: Rotating proxy to: {next_state}. Effective interval: {effective_interval:.2f}s. Forced: {force_rotation}")
+            self._proxy_state['last_state'] = next_state
+            self._proxy_state['last_rotation_time'] = current_time
+            return next_state
+
+        print("WARNING: All proxy states have open circuit breakers or failed. Resetting all and trying default.")
+        # If all proxies are in a bad state, reset all circuit breakers as a last resort
+        for state_key in self._proxy_state['circuits']:
+            self._proxy_state['circuits'][state_key]['is_open'] = False
+            self._proxy_state['circuits'][state_key]['failure_count'] = 0
+        self._proxy_state['last_used_proxy_index'] = 0 # Reset index
+        default_state = us_states[0]
+        self._proxy_state['last_state'] = default_state
+        self._proxy_state['last_rotation_time'] = current_time
+        print(f"DEBUG: All circuits reset. Using default state: {default_state}")
+        return default_state
+
     async def _direct_search_google(self, query, search_url, num_results=6):
         """
         Search Google directly without proxies
         """
+        # Initialize result to handle cases where crawler setup might fail
+        result = None 
         try:
             print(f"Using direct search method for query: {query}")
             
             # Use AsyncWebCrawler without a proxy
             try:
                 print(f"Starting direct crawl4ai with timeout...")
-                # Create a timeout for the crawler operation
                 import asyncio
                 async with AsyncWebCrawler() as crawler:
-                    # Rotate user agents
-                    user_agents = [
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/112.0",
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/112.0"
-                    ]
-                    
                     # Create a task for the crawler operation with a timeout
                     try:
-                        # Set a timeout of 20 seconds for the crawler operation
                         result = await asyncio.wait_for(
                             crawler.arun(
                                 search_url,
                                 headless=self.headless,
-                                user_agent=random.choice(user_agents),
+                                user_agent=self._get_random_user_agent(), # Ensure this calls the class method
                                 cache_mode="bypass",
                                 wait_until="networkidle",
                                 page_timeout=15000,  # Reduced timeout to 15 seconds
@@ -1007,9 +1058,13 @@ class SerpAnalyzer:
                         print(f"Direct crawl4ai operation timed out after 20 seconds")
                         return []
             except Exception as e:
-                print(f"Error setting up direct crawl4ai: {str(e)}")
+                print(f"Error setting up or running direct crawl4ai: {str(e)}")
                 return []
                 
+            if result is None: # Check if crawler operation failed to assign result
+                print(f"Direct crawl4ai did not return a result, possibly due to setup error.")
+                return []
+
             if not result.success:
                 print(f"Error searching with direct method: {result.error_message}")
                 return []
@@ -1024,9 +1079,33 @@ class SerpAnalyzer:
                 # Try regex extraction as a last resort
                 return await self._extract_results_with_regex(html_content, num_results)
         except Exception as e:
-            print(f"Error using direct search method: {str(e)}")
+            print(f"Overall error in _direct_search_google: {str(e)}")
             return []
-            
+
+    def _get_random_user_agent(self):
+        """
+        Return a random user agent string to avoid detection.
+        Uses more modern browser versions to appear legitimate.
+        """
+        user_agents = [
+            # Chrome on Windows
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            # Chrome on macOS
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            # Firefox on Windows
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0",
+            # Safari on macOS
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15",
+            # Edge on Windows
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0"
+        ]
+        return random.choice(user_agents)
+
     async def analyze_page(self, url):
         """
         Analyze a single page to extract SEO and content data.
@@ -1171,6 +1250,12 @@ class SerpAnalyzer:
         
         # Print diagnostic information
         print(f"Search results type: {type(search_results)}")
+        
+        # Handle case where search_results is None
+        if search_results is None:
+            print(f"Search results is None")
+            search_results = []
+        
         print(f"Search results count: {len(search_results)}")
         
         # Check if we got any results
