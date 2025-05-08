@@ -1,3 +1,4 @@
+# SERP Analyzer with enhanced Oxylabs integration for reliable Google search results
 import os
 import sys
 import json
