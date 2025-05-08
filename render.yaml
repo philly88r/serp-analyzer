@@ -6,7 +6,7 @@ services:
     repo: https://github.com/philly88r/serp-analyzer.git
     branch: main
     dockerfilePath: ./Dockerfile
-    dockerCommand: gunicorn --bind 0.0.0.0:$PORT app:app
+    dockerCommand: bash -c "python setup_playwright.py && gunicorn --bind 0.0.0.0:$PORT --timeout 300 app:app"
     envVars:
       - key: PORT
         value: 8080
@@ -14,6 +14,10 @@ services:
         value: /app/.playwright
       - key: PYTHONUNBUFFERED
         value: "1"
-    buildCommand: python -m playwright install chromium --with-deps
+      - key: RENDER
+        value: "true"
+      - key: PLAYWRIGHT_SKIP_VALIDATION
+        value: "1"
+    buildCommand: python -m playwright install chromium --with-deps && python -m playwright install-deps chromium
     healthCheckPath: /
     autoDeploy: true

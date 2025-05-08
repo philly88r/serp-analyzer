@@ -36,13 +36,33 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Playwright and browsers with explicit paths
 RUN pip install --no-cache-dir playwright
 
-# Set environment variables for Playwright
+# Set environment variables for Playwright and Render
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
+ENV RENDER=true
+ENV PLAYWRIGHT_SKIP_VALIDATION=1
+
+# Install additional dependencies required for Playwright on Render
+RUN apt-get update && apt-get install -y \
+    fonts-noto-color-emoji \
+    ttf-wqy-zenhei \
+    fonts-noto-cjk \
+    fonts-freefont-ttf \
+    libxtst6 \
+    libxrandr2 \
+    libgconf-2-4 \
+    libnss3-dev \
+    libgbm-dev \
+    libxss1 \
+    libasound2 \
+    libxdamage1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Chromium with explicit path and skip browser download check
 RUN mkdir -p /app/.playwright && \
     python -m playwright install chromium --with-deps && \
-    python -m playwright install-deps chromium
+    python -m playwright install-deps chromium && \
+    chmod -R 777 /app/.playwright
     
 # Verify browser installation
 RUN ls -la /app/.playwright

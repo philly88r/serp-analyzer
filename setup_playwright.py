@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import logging
+import platform
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
@@ -16,8 +17,15 @@ def print_error(message):
 def setup_playwright():
     print_message("Starting Playwright setup...")
     is_heroku = 'DYNO' in os.environ
+    is_render = 'RENDER' in os.environ
     # Default to '0' if the env var is not set, so skip_browser_download becomes False
     skip_browser_download = os.environ.get('PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD', '0') == '1'
+    
+    # Log all environment variables for debugging
+    print_message("Environment variables:")
+    for key, value in os.environ.items():
+        if key.startswith("PLAYWRIGHT") or key in ["PATH", "PYTHONPATH", "RENDER", "DYNO"]:
+            print_message(f"  {key}: {value}")
 
     if is_heroku:
         print_message("Running on Heroku.")
@@ -29,6 +37,15 @@ def setup_playwright():
             # Heroku buildpacks typically install browsers to /app/.playwright
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
             print_message(f"PLAYWRIGHT_BROWSERS_PATH defaulted to /app/.playwright for Heroku.")
+    elif is_render:
+        print_message("Running on Render.")
+        # Set the browsers path for Render
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/.playwright'
+        print_message(f"PLAYWRIGHT_BROWSERS_PATH set to /opt/render/.playwright for Render.")
+        
+        # Set additional environment variables for Render
+        os.environ['PLAYWRIGHT_SKIP_VALIDATION'] = '1'
+        print_message("Set PLAYWRIGHT_SKIP_VALIDATION=1 for Render.")
 
     if skip_browser_download:
         print_message("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is '1'. Skipping browser installation and verification.")
@@ -76,9 +93,22 @@ def install_playwright_browsers(browser_name="chromium"):
     # For safety, keeping it but it should not be hit in the new Heroku flow.
     print_message(f"INFO: 'install_playwright_browsers' called. Attempting to install {browser_name} using 'playwright install {browser_name}'...")
     try:
+        # Check if we're on Render
+        is_render = 'RENDER' in os.environ
+        
+        # Command to run
+        cmd = [sys.executable, "-m", "playwright", "install", browser_name]
+        
+        # On Render, we need to add --with-deps
+        if is_render:
+            cmd.append("--with-deps")
+            print_message(f"Adding --with-deps for Render environment")
+        
+        print_message(f"Running command: {' '.join(cmd)}")
+        
         # Using sys.executable to ensure we're using the python from the correct environment
         process_result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", browser_name], 
+            cmd, 
             check=False,  # Set to False to handle errors manually
             capture_output=True, 
             text=True
@@ -104,9 +134,34 @@ def install_playwright_browsers(browser_name="chromium"):
 def verify_chromium_installation():
     print_message("Verifying Chromium installation...")
     try:
+        # Check if we're on Render
+        is_render = 'RENDER' in os.environ
+        
+        # First, try to locate the browser executable
+        if is_render:
+            # Check if the browser exists in the expected location
+            browser_path = "/opt/render/.playwright/chromium-1169/chrome-linux/chrome"
+            if os.path.exists(browser_path):
+                print_message(f"Found Chromium executable at: {browser_path}")
+            else:
+                print_message(f"WARNING: Chromium executable not found at expected path: {browser_path}")
+                # Try to find it elsewhere
+                try:
+                    result = subprocess.run(["find", "/opt/render", "-name", "chrome", "-type", "f"], 
+                                           capture_output=True, text=True, check=False)
+                    if result.stdout:
+                        print_message(f"Found potential Chrome executables: {result.stdout}")
+                    else:
+                        print_message("No Chrome executables found in /opt/render")
+                except Exception as e:
+                    print_message(f"Error searching for Chrome: {e}")
+        
+        # Import here to avoid import errors if module is missing
+        from playwright.sync_api import sync_playwright
+        
         with sync_playwright() as p:
             browser_args = {
-                "executable_path": None, # Let Playwright find it
+                "executable_path": None,  # Let Playwright find it
                 "args": [
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
@@ -118,18 +173,35 @@ def verify_chromium_installation():
                 "ignore_default_args": ["--disable-extensions"],
                 "timeout": 60000  # Increased timeout
             }
-            if platform.system() == "Linux" and os.environ.get("DISPLAY") is None:
-                print_message("Linux environment with no DISPLAY detected, ensuring headless for verification.")
-                # browser_args["headless"] = True # Playwright's chromium is headless by default
+            
+            # Always use headless mode on servers
+            if platform.system() == "Linux" and (os.environ.get("DISPLAY") is None or is_render):
+                print_message("Linux environment with no DISPLAY detected or running on Render, ensuring headless for verification.")
+                browser_args["headless"] = True
 
             print_message(f"Attempting to launch browser with args: {browser_args}")
-            browser = p.chromium.launch(**browser_args)
-            page = browser.new_page()
-            page.goto("https://example.com")
-            title = page.title()
-            print_message(f"Successfully loaded page with title: {title}")
-            browser.close()
-            print_message("Chromium verification successful!")
+            
+            try:
+                browser = p.chromium.launch(**browser_args)
+                page = browser.new_page()
+                page.goto("https://example.com")
+                title = page.title()
+                print_message(f"Successfully loaded page with title: {title}")
+                browser.close()
+                print_message("Chromium verification successful!")
+            except Exception as e:
+                print_error(f"Error during browser launch or page navigation: {e}")
+                
+                # Try to install browser if it failed
+                if is_render:
+                    print_message("Attempting to install Chromium as verification failed...")
+                    try:
+                        install_playwright_browsers("chromium")
+                        print_message("Chromium installation attempted. Will not verify again to avoid recursion.")
+                    except Exception as install_error:
+                        print_error(f"Failed to install Chromium: {install_error}")
+                        
+                raise  # Re-raise the original exception
     except Exception as e:
         print_error(f"Chromium verification failed: {e}")
         raise RuntimeError(f"Chromium verification failed: {e}")
