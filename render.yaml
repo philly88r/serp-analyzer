@@ -5,7 +5,7 @@ services:
     region: ohio
     plan: free
     repo: https://github.com/philly88r/serp-analyzer.git
-    branch: main
+    branch: master
     dockerfilePath: ./Dockerfile
     dockerCommand: ./start.sh
     buildCommand: python -m playwright install chromium && python -m playwright install-deps chromium
