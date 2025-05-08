@@ -43,7 +43,13 @@ def setup_playwright():
             try:
                 import playwright # Check if module itself is importable
                 from playwright.sync_api import sync_playwright # Further check
-                print_message(f"Playwright module version: {playwright.__version__} found.")
+                # Fix for AttributeError: module 'playwright' has no attribute '__version__'
+                # Try different ways to get the version
+                try:
+                    from playwright.__version__ import __version__ as playwright_version
+                    print_message(f"Playwright module version: {playwright_version} found.")
+                except ImportError:
+                    print_message(f"Playwright module found, but version information not available.")
             except ImportError:
                 print_error("Playwright Python module not found. Cannot verify browser installation.")
                 print_message("Application will likely run in limited functionality mode.")
