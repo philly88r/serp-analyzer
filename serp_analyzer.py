@@ -8,7 +8,8 @@ import asyncio
 import logging
 import requests
 import pandas as pd
-from urllib.parse import quote_plus, unquote
+import re
+from urllib.parse import quote_plus, unquote, urlparse
 from datetime import datetime
 from pathlib import Path
 from bs4 import BeautifulSoup
@@ -122,17 +123,8 @@ class SerpAnalyzer:
                 print(f"Found {len(results)} results with direct HTTP method")
                 return results
             
-            # If direct HTTP failed, try the SERP API
-            print("Direct HTTP method failed, trying Oxylabs SERP API")
-            results = await self._search_with_oxylabs_serp_api(query, num_results)
-            
-            # If we got results, return them
-            if results and len(results) > 0:
-                print(f"Found {len(results)} results with SERP API")
-                return results
-            
-            # If both methods failed, try the proxy method
-            print("SERP API failed, trying Oxylabs proxy with crawler")
+            # If direct HTTP failed, try the proxy method with crawler
+            print("Direct HTTP method failed, trying Oxylabs proxy with crawler")
             return await self._search_with_oxylabs_proxy(query, search_url, num_results)
         
         # If Oxylabs is not configured, use the direct method with anti-bot measures
@@ -593,7 +585,7 @@ class SerpAnalyzer:
             return unique_results[:num_results]  # Return only the requested number of results
             
         except Exception as e:
-            print(f"Error processing Google HTML: {str(e)}")
+            print(f"Error using SERP API: {str(e)}")
             return []
     
     async def _extract_results_with_regex(self, html, num_results=6):
@@ -720,17 +712,17 @@ class SerpAnalyzer:
         except Exception as e:
             print(f"Error using SERP API: {str(e)}")
             return []
-    
+            
     async def _search_with_oxylabs_proxy(self, query, search_url, num_results=6):
         """
-        Search Google using Oxylabs proxy with our crawler
+        Search Google using Oxylabs proxy with crawl4ai browser automation
         """
         try:
             print(f"Using Oxylabs proxy with crawler for query: {query}")
             
             # Determine which US state to use based on our rotation strategy
             current_time = time.time()
-            current_state = self._proxy_state['last_state']
+            current_state = self._proxy_state.get('current_state')
             
             # If we need to rotate or don't have a current state, choose a new one
             if not current_state or current_time - self._proxy_state['last_rotation'] > self._proxy_state['rotation_interval']:
@@ -744,28 +736,27 @@ class SerpAnalyzer:
                 ]
                 
                 # Filter out states with open circuit breakers
-                working_states = [s for s in us_states if not self._proxy_state['circuit_breaker'][s]['is_open']]
+                working_states = [s for s in us_states if not self._proxy_state['circuit_breaker'].get(s, {}).get('is_open', False)]
                 
                 # If no working states, reset all circuit breakers
                 if not working_states:
                     for state in us_states:
-                        self._proxy_state['circuit_breaker'][state]['is_open'] = False
+                        self._proxy_state['circuit_breaker'][state] = {'is_open': False, 'failure_count': 0, 'last_attempt': time.time()}
                     working_states = us_states
                 
                 # Sort by block count and choose from the best options
-                working_states.sort(key=lambda s: self._proxy_state['state_blocks'][s])
+                working_states.sort(key=lambda s: self._proxy_state['state_blocks'].get(s, 0))
                 selection_pool = working_states[:min(3, len(working_states))]
                 current_state = random.choice(selection_pool)
                 
                 # Update state tracking
                 self._proxy_state['last_rotation'] = current_time
-                self._proxy_state['last_state'] = current_state
+                self._proxy_state['current_state'] = current_state
                 
                 print(f"Rotating proxy for crawler: Using {current_state}")
             
             # Generate a unique session ID
-            import uuid
-            session_id = str(uuid.uuid4())[:12]
+            session_id = random.randint(10000, 99999)
             
             # Set up the proxy with enhanced authentication
             proxy_username = f"{OXYLABS_USERNAME}-st-{current_state}-sessid-{session_id}-sesstime-3"
@@ -799,13 +790,13 @@ class SerpAnalyzer:
                     if is_blocked:
                         print("Detected block in crawler error message")
                         # Update block tracking
-                        self._proxy_state['block_count'] += 1
+                        self._proxy_state['block_count'] = self._proxy_state.get('block_count', 0) + 1
                         self._proxy_state['last_block_time'] = time.time()
-                        self._proxy_state['state_blocks'][current_state] += 1
+                        self._proxy_state['state_blocks'][current_state] = self._proxy_state['state_blocks'].get(current_state, 0) + 1
                         
                         # Update circuit breaker
-                        circuit = self._proxy_state['circuit_breaker'][current_state]
-                        circuit['failure_count'] += 1
+                        circuit = self._proxy_state['circuit_breaker'].get(current_state, {'is_open': False, 'failure_count': 0, 'last_attempt': time.time()})
+                        circuit['failure_count'] = circuit.get('failure_count', 0) + 1
                         circuit['last_attempt'] = time.time()
                         
                         # Open circuit breaker if too many failures
@@ -834,7 +825,7 @@ class SerpAnalyzer:
         except Exception as e:
             print(f"Error using Oxylabs proxy with crawler: {str(e)}")
             return []
-    
+            
     async def _direct_search_google(self, query, search_url, num_results=6):
         """
         Search Google directly without proxies
@@ -971,23 +962,31 @@ class SerpAnalyzer:
                 # Count images
                 images = soup.find_all('img')
                 
+                # Calculate word count from the HTML content
+                text_content = soup.get_text()
+                words = text_content.split()
+                word_count = len(words)
+                
+                # Get content preview
+                content_preview = ' '.join(words[:500]) + '...' if len(words) > 500 else text_content
+                
                 # Compile the analysis data
                 analysis = {
                     "success": True,
                     "url": url,
-                    "title": soup.title.string.strip() if soup.title else "",
+                    "title": soup.title.string.strip() if soup.title else "", 
                     "meta_description": meta_description,
                     "meta_keywords": meta_keywords,
                     "h1_tags": h1_tags,
                     "h2_tags": h2_tags,
                     "h3_tags": h3_tags,
-                    "word_count": result.word_count,
+                    "word_count": word_count,
                     "internal_links": internal_links,
                     "external_links": external_links,
                     "internal_links_count": len(internal_links),
                     "external_links_count": len(external_links),
                     "images_count": len(images),
-                    "content": result.text[:5000] if result.text else ""  # Limit content to 5000 chars
+                    "content": content_preview  # Limit content to preview
                 }
                 
                 return analysis
