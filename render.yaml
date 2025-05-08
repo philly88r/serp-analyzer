@@ -6,7 +6,7 @@ services:
     repo: https://github.com/philly88r/serp-analyzer.git
     branch: master
     dockerfilePath: ./Dockerfile
-    dockerCommand: bash ./start.sh
+    dockerCommand: /usr/local/bin/python setup_playwright.py && /usr/local/bin/gunicorn --bind 0.0.0.0:$PORT --timeout 300 app:app
     envVars:
       - key: PORT
         value: 8080
@@ -31,6 +31,8 @@ services:
         value: "residential"
       - key: COUNTRY
         value: "us"
+      - key: GEMINI_API_KEY
+        value: "AIzaSyBl6LgSol_l_ELLHhd5YX90VeXEwdt3xPU"
     buildCommand: python -m playwright install chromium --with-deps && python -m playwright install-deps chromium
     healthCheckPath: /
     autoDeploy: true

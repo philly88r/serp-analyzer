@@ -54,3 +54,8 @@ ENV/
 *.pyc
 __pycache__/
 .DS_Store
+
+# API Keys and Sensitive Information
+api_keys.py
+*_config.py
+!api_config.py
