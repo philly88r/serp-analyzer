@@ -4,9 +4,9 @@ services:
     name: serp-analyzer
     env: docker
     repo: https://github.com/philly88r/serp-analyzer.git
-    branch: main
+    branch: master
     dockerfilePath: ./Dockerfile
-    dockerCommand: bash -c "python setup_playwright.py && gunicorn --bind 0.0.0.0:$PORT --timeout 300 app:app"
+    dockerCommand: bash ./start.sh
     envVars:
       - key: PORT
         value: 8080
