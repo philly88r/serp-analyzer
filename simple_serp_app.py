@@ -458,6 +458,11 @@ def api_search():
         logger.error(f"Error in API search: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/test-route')
+def test_route():
+    logger.info("Accessed /api/test-route")
+    return jsonify({"message": "Test route is working!"})
+
 @app.route('/download/<filename>')
 def download_results(filename):
     return send_from_directory('results', filename, as_attachment=True)
