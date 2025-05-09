@@ -116,13 +116,13 @@ class BypassSerpAnalyzer:
                     logger.info(f"Waiting {delay:.2f} seconds before retry")
                     await asyncio.sleep(delay)
                 
-                # Method 1: Try using DuckDuckGo as a proxy to Google
-                results = await self._search_with_duckduckgo(query, num_results)
+                # Method 1: Try using a direct HTTP request to Google
+                results = await self._search_with_direct_http(query, num_results)
                 
                 if results and len(results) > 0:
-                    logger.info(f"DuckDuckGo search returned {len(results)} results")
+                    logger.info(f"Direct HTTP request returned {len(results)} results")
                     return results
-                
+
                 # Method 2: Try using Bing
                 results = await self._search_with_bing(query, num_results)
                 
@@ -130,11 +130,11 @@ class BypassSerpAnalyzer:
                     logger.info(f"Bing search returned {len(results)} results")
                     return results
                 
-                # Method 3: Try using a direct HTTP request to Google
-                results = await self._search_with_direct_http(query, num_results)
+                # Method 3: Try using DuckDuckGo as a proxy to Google
+                results = await self._search_with_duckduckgo(query, num_results)
                 
                 if results and len(results) > 0:
-                    logger.info(f"Direct HTTP request returned {len(results)} results")
+                    logger.info(f"DuckDuckGo search returned {len(results)} results")
                     return results
             
             logger.error(f"All search methods and retries failed for query: {query}")
@@ -159,7 +159,7 @@ class BypassSerpAnalyzer:
         try:
             logger.info(f"Analyzing page: {url}")
             self._respect_rate_limits() # Ensure we don't hit sites too fast either
-            async with session.get(url, headers=headers, timeout=20) as response:
+            async with session.get(url, headers=headers, timeout=45) as response:
                 if response.status != 200:
                     logger.warning(f"Failed to fetch {url}, status: {response.status}")
                     return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
@@ -630,8 +630,9 @@ class BypassSerpAnalyzer:
             
             # Method 1: Look for standard Google result containers
             selectors = [
-                'div.g', 'div.tF2Cxc', 'div.yuRUbf', 'div.rc', 
-                'div[data-header-feature]', 'div.MjjYud', 'div.Gx5Zad'
+                'div.g', 'div.kvH3mc', 'div.Ww4FFb', 'div.Gx5Zad', 'div.MjjYud',
+                'div.tF2Cxc', 'div.yuRUbf', 'div.rc', 
+                'div[data-header-feature]', 'div[jscontroller][data-hveid]'
             ]
             
             for selector in selectors:
@@ -657,7 +658,10 @@ class BypassSerpAnalyzer:
                     
                     # Extract description
                     description = ""
-                    desc_selectors = ['div.VwiC3b', 'span.st', 'div.s']
+                    desc_selectors = [
+                        'div.VwiC3b', 'div.Z26q7c.UK95Uc', 'span.MUxGbd.yDYNvb.lyLwlc',
+                        'div[data-sncf~="1"]', 'span.st', 'div.s'
+                    ]
                     for desc_selector in desc_selectors:
                         desc_element = container.select_one(desc_selector)
                         if desc_element:
