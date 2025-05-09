@@ -874,17 +874,44 @@ def api_search():
                     "error": "No search results found"
                 }
             
-            # Process results
+            # Process results - analyze each page in detail
             analyzed_pages = []
             
-            # We'll use a simpler approach here - just extract basic info from search results
-            # without fetching and analyzing each page in detail
-            for result in search_results:
-                analyzed_pages.append({
-                    "url": result.get('url', ''),
-                    "title": result.get('title', 'No title'),
-                    "description": result.get('snippet', 'No description available')
-                })
+            # Use aiohttp for concurrent page analysis
+            async with aiohttp.ClientSession() as session:
+                tasks = []
+                for result in search_results:
+                    if result.get('url'):
+                        # Add task to analyze each page
+                        tasks.append(analyze_page(result['url'], session))
+                
+                # Gather results from all page analysis tasks
+                # Use return_exceptions=True to prevent one failed task from stopping others
+                page_analysis_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                for i, analyzed_data in enumerate(page_analysis_results):
+                    original_result = search_results[i] # Assuming order is maintained
+                    if isinstance(analyzed_data, Exception):
+                        # Handle exceptions during page analysis
+                        print(f"Exception during page analysis for {original_result.get('url')}: {analyzed_data}")
+                        analyzed_pages.append({
+                            "url": original_result.get('url', ''),
+                            "title": original_result.get('title', 'Error'),
+                            "description": original_result.get('snippet', 'Failed to analyze page details.'),
+                            "error_detail": str(analyzed_data)
+                        })
+                    elif analyzed_data:
+                        # Merge raw search result data with detailed analyzed data
+                        # Analyzed data takes precedence for common fields
+                        merged_data = {**original_result, **analyzed_data} 
+                        analyzed_pages.append(merged_data)
+                    else:
+                        # Fallback if analyze_page somehow returns None but not an exception
+                        analyzed_pages.append({
+                            "url": original_result.get('url', ''),
+                            "title": original_result.get('title', 'N/A'),
+                            "description": original_result.get('snippet', 'Page analysis returned no data.'),
+                        })
             
             # Save results
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -921,33 +948,127 @@ def api_search():
         return jsonify({"error": str(e)}), 500
 
 async def analyze_page(url, session):
-    """Analyze a single page for basic data."""
+    """Analyze a single page for detailed SEO data."""
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": "https://www.google.com/"
         }
         
-        async with session.get(url, headers=headers, timeout=15) as response:
+        print(f"Analyzing page: {url}")
+        async with session.get(url, headers=headers, timeout=20) as response:
             if response.status != 200:
+                print(f"Failed to fetch {url}, status: {response.status}")
                 return {"error": f"HTTP {response.status}"}
             
             html = await response.text()
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html, 'html.parser')
             
+            # Basic page info
             title = soup.title.string.strip() if soup.title else ""
             
-            # Get meta description
+            # Meta tags
             meta_desc = soup.find('meta', attrs={'name': 'description'})
-            description = meta_desc['content'] if meta_desc and meta_desc.get('content') else ""
+            description = meta_desc['content'].strip() if meta_desc and meta_desc.get('content') else ""
             
+            meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+            keywords = meta_keywords['content'].strip() if meta_keywords and meta_keywords.get('content') else ""
+            
+            # Extract headings
+            h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
+            h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
+            h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
+            
+            # Extract links
+            links = []
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                # Convert relative URLs to absolute
+                if href.startswith('/'):
+                    if url.endswith('/'):
+                        href = url + href[1:]
+                    else:
+                        href = url + href
+                elif not href.startswith(('http://', 'https://')):
+                    if url.endswith('/'):
+                        href = url + href
+                    else:
+                        href = url + '/' + href
+                
+                links.append({
+                    'text': link.get_text(strip=True),
+                    'url': href,
+                    'is_internal': href.startswith(url) if href.startswith(('http://', 'https://')) else True
+                })
+            
+            # Count internal and external links
+            internal_links = [link for link in links if link['is_internal']]
+            external_links = [link for link in links if not link['is_internal']]
+            
+            # Extract images
+            images = []
+            for img in soup.find_all('img', src=True):
+                src = img['src']
+                # Convert relative URLs to absolute
+                if src.startswith('/'):
+                    if url.endswith('/'):
+                        src = url + src[1:]
+                    else:
+                        src = url + src
+                elif not src.startswith(('http://', 'https://')):
+                    if url.endswith('/'):
+                        src = url + src
+                    else:
+                        src = url + '/' + src
+                
+                images.append({
+                    'src': src,
+                    'alt': img.get('alt', '')
+                })
+            
+            # Extract text content
+            body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
+            word_count = len(body_text.split()) if body_text else 0
+            
+            # Get a sample of the content (first 200 words)
+            content_sample = " ".join(body_text.split()[:200]) if body_text else ""
+            
+            print(f"Successfully analyzed: {url}, Title: {title[:50]}...")
             return {
+                "url": url,
                 "title": title,
-                "description": description
+                "description": description,
+                "keywords": keywords,
+                "headings": {
+                    "h1": h1_tags,
+                    "h2": h2_tags,
+                    "h3": h3_tags
+                },
+                "links": {
+                    "total": len(links),
+                    "internal": len(internal_links),
+                    "external": len(external_links),
+                    "sample": links[:10]  # Include first 10 links as a sample
+                },
+                "images": {
+                    "total": len(images),
+                    "with_alt": len([img for img in images if img['alt']]),
+                    "sample": images[:5]  # Include first 5 images as a sample
+                },
+                "content": {
+                    "word_count": word_count,
+                    "sample": content_sample
+                }
             }
+    except asyncio.TimeoutError:
+        print(f"Timeout analyzing page: {url}")
+        return {"url": url, "error": "Timeout"}
     except Exception as e:
         print(f"Error analyzing {url}: {str(e)}")
-        return {"error": str(e)}
+        return {"url": url, "error": str(e)}
 
 
 # ===========================
