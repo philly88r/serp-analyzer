@@ -1,83 +1,178 @@
-
-{% extends "base.html" %}
-
-{% block title %}SEO Analyzer & Blog Generator{% endblock %}
-
-{% block content %}
-<div class="row justify-content-center">
-    <div class="col-lg-8">
-        <div class="card mb-4">
-            <div class="card-header">
-                <h2 class="mb-0"><i class="fas fa-search me-2"></i>SEO Analysis</h2>
-            </div>
-            <div class="card-body">
-                <p class="lead text-center mb-4">Enter a search query to analyze search engine results and get detailed SEO insights</p>
-                
-                <form id="search-form" action="/search" method="post" class="search-form">
-                    <div class="mb-3">
-                        <label for="query" class="form-label">Search Query</label>
-                        <input type="text" class="form-control form-control-lg" id="query" name="query" placeholder="Enter your search query" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="num_results" class="form-label">Number of results to analyze</label>
-                        <select class="form-select" id="num_results" name="num_results">
-                            <option value="5">5 results</option>
-                            <option value="10" selected>10 results</option>
-                            <option value="15">15 results</option>
-                            <option value="20">20 results</option>
-                        </select>
-                    </div>
-                    <div class="d-grid gap-2">
-                        <button type="submit" id="search-button" class="btn btn-primary btn-lg">
-                            <i class="fas fa-search me-2"></i>Analyze
-                        </button>
-                    </div>
-                </form>
-            </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced SERP Analyzer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.css">
+</head>
+<body>
+    <header class="main-header">
+        <div class="header-content">
+            <h1><i class="fas fa-search-plus"></i> Advanced SERP Analyzer</h1>
+            <p class="tagline">Comprehensive SEO analysis to outrank your competition</p>
         </div>
-        
-        <div id="loading" style="display: none;" class="text-center my-5">
-            <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-3 lead">Analyzing search results...</p>
-            <!-- Progress bar container will be added here by JavaScript -->
-        </div>
-        
-        <div id="results-container" style="display: none;">
-            <div class="card mb-4">
-                <div class="card-header bg-primary text-white">
-                    <h2 class="mb-0"><i class="fas fa-chart-bar me-2"></i>Analysis Results</h2>
+    </header>
+
+    <main class="container">
+        <section class="search-section">
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-search"></i> Search Query</h2>
                 </div>
                 <div class="card-body">
-                    <div id="results-info" class="alert alert-info"></div>
-                    
-                    <div id="results-list" class="mt-4"></div>
-                    
-                    <div id="download-links" class="mt-4 text-center">
-                        <a id="download-json" href="#" class="btn btn-outline-primary me-2">
-                            <i class="fas fa-download me-2"></i>Download JSON
+                    <form id="search-form" action="/search" method="post">
+                        <div class="form-group">
+                            <input type="text" id="query" name="query" placeholder="Enter your search query" required>
+                        </div>
+                        <div class="form-group form-inline">
+                            <label for="num_results">Number of results:</label>
+                            <select id="num_results" name="num_results">
+                                <option value="5">5</option>
+                                <option value="10" selected>10</option>
+                                <option value="15">15</option>
+                                <option value="20">20</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <button type="submit" id="search-button" class="btn-primary">
+                                <i class="fas fa-search"></i> Analyze
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+
+        <div id="loading" class="loading-container" style="display: none;">
+            <div class="spinner"></div>
+            <h3 id="loading-status">Analyzing search results...</h3>
+            <div id="progress-container" class="progress-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <p id="progress-text" class="progress-text">Starting analysis...</p>
+            <p class="small">This process may take several minutes as we analyze each page in detail.</p>
+            <div id="timeout-warning" class="timeout-warning" style="display: none;">
+                <p><i class="fas fa-exclamation-triangle"></i> The analysis is taking longer than expected.</p>
+                <p>You can wait for it to complete or try again with fewer results.</p>
+                <button id="cancel-button" class="btn-secondary"><i class="fas fa-times"></i> Cancel</button>
+            </div>
+        </div>
+
+        <section id="results-container" style="display: none;">
+            <!-- Results Summary Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-chart-line"></i> Analysis Summary</h2>
+                </div>
+                <div class="card-body">
+                    <div id="results-info" class="summary-info"></div>
+                    <div class="action-buttons">
+                        <a id="download-json" href="#" class="btn-secondary">
+                            <i class="fas fa-download"></i> Download JSON
                         </a>
-                        <a id="download-csv" href="#" class="btn btn-outline-primary">
-                            <i class="fas fa-file-csv me-2"></i>Download CSV
+                        <a id="download-csv" href="#" class="btn-secondary">
+                            <i class="fas fa-file-csv"></i> Download CSV
+                        </a>
+                        <a id="view-serp-html" href="#" class="btn-secondary">
+                            <i class="fas fa-file-code"></i> View SERP HTML
+                        </a>
+                        <a id="view-analysis" href="#" class="btn-secondary">
+                            <i class="fas fa-chart-bar"></i> View Full Analysis
                         </a>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-</div>
 
-<div class="row justify-content-center mt-3">
-    <div class="col-lg-8">
-        <div class="alert alert-info">
-            <p class="mb-0"><i class="fas fa-info-circle me-2"></i><strong>Note:</strong> If the regular search is not working, please use the green "Test Simple Search" button that appears below the search form.</p>
-        </div>
-    </div>
-</div>
-{% endblock %}
+            <!-- Comparative Analysis Table -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-table"></i> Comparative SEO Analysis</h2>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table id="comparative-table" class="comparative-table">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Website</th>
+                                    <th>Word Count</th>
+                                    <th>H1 Tags</th>
+                                    <th>Internal Links</th>
+                                    <th>External Links</th>
+                                    <th>Images</th>
+                                    <th>Alt Text %</th>
+                                    <th>Schema</th>
+                                    <th>SEO Score</th>
+                                </tr>
+                            </thead>
+                            <tbody id="comparative-table-body">
+                                <!-- Table rows will be added here by JavaScript -->
+                            </tbody>
+                            <tfoot id="comparative-table-footer">
+                                <!-- Average row will be added here by JavaScript -->
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+            </div>
 
-{% block extra_js %}
-<script src="{{ url_for('static', filename='script.js') }}"></script>
-<script src="{{ url_for('static', filename='test-script.js') }}"></script>
-{% endblock %}
+            <!-- Visualization Section -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-chart-pie"></i> SEO Metrics Visualization</h2>
+                </div>
+                <div class="card-body">
+                    <div class="charts-container">
+                        <div class="chart-wrapper">
+                            <canvas id="word-count-chart"></canvas>
+                        </div>
+                        <div class="chart-wrapper">
+                            <canvas id="links-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detailed Results List -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-list"></i> Detailed Results</h2>
+                </div>
+                <div class="card-body">
+                    <div id="results-list" class="results-list">
+                        <!-- Results will be added here by JavaScript -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- SEO Recommendations -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-lightbulb"></i> SEO Recommendations</h2>
+                </div>
+                <div class="card-body">
+                    <div id="seo-recommendations" class="recommendations">
+                        <!-- Recommendations will be added here by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="main-footer">
+        <p>&copy; 2025 Advanced SERP Analyzer - A comprehensive tool for SEO analysis</p>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script src="{{ url_for('static', filename='test-script.js') }}"></script>
+
+    <div class="info-box">
+        <p><strong>Note:</strong> If the regular search is not working, please use the green "Test Simple Search" button that appears below the search form.</p>
+    </div>
+</body>
+</html>

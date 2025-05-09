@@ -5,7 +5,6 @@ import asyncio
 import re
 import markdown
 from datetime import datetime
-from threading import Thread
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, send_from_directory
 import generate_seo_blog
 # Import serp_analyzer directly instead of serp_analyzer_working
@@ -807,7 +806,6 @@ def simple_search():
 def api_search():
     """API endpoint for the frontend to search and analyze SERP results.
     This is a synchronous version that uses a thread to run the async operations.
-    It combines the bypass_serp approach with the original SEO analyzer AI analysis.
     """
     try:
         data = request.get_json()
@@ -859,187 +857,17 @@ def api_search():
         # Initialize the analyzer
         analyzer = SerpAnalyzer()
         
-        # Set a longer timeout for the entire operation (5 minutes)
-        timeout = 300
+        # Run the search in a synchronous way
+        # This is a simplified approach - in production, you'd want to use a proper task queue
+        loop = asyncio.new_event_loop()
         
-        # Create a timestamp for this search operation
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename_query = re.sub(r'\W+', '_', query)
-        json_filename = f"{filename_query}_{timestamp}.json"
-        
-        # Create a status file to track progress
-        status_path = os.path.join(app.config['RESULTS_FOLDER'], f"{filename_query}_{timestamp}_status.json")
-        status_data = {
-            "query": query,
-            "timestamp": datetime.now().isoformat(),
-            "status": "started",
-            "progress": 0,
-            "message": "Starting search operation"
-        }
-        with open(status_path, 'w', encoding='utf-8') as f:
-            json.dump(status_data, f, indent=4)
-        
-        # Initialize the analyzer
-        analyzer_instance = SerpAnalyzer()
-        
-        # Define a function to run the search in a separate thread
-        def run_search_thread():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(run_search(analyzer_instance, query, num_results, status_path, status_data, json_filename, timestamp, filename_query))
-            finally:
-                loop.close()
-        
-        # Run in a separate thread to avoid blocking the Flask server
-        thread = Thread(target=run_search_thread)
-        thread.daemon = True
-        thread.start()
-        
-        # Return a status URL for the client to check progress
-        status_url = f"/api/status/{filename_query}_{timestamp}_status.json"
-        return jsonify({
-            "message": "Search started successfully",
-            "status_url": status_url,
-            "query": query,
-            "timestamp": datetime.now().isoformat()
-        })
-
-    except Exception as e:
-        import traceback
-        print(f"Error in API search: {str(e)}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/status/<status_file>', methods=['GET'])
-def api_status(status_file):
-    """API endpoint to check the status of a long-running operation."""
-    try:
-        status_path = os.path.join(app.config['RESULTS_FOLDER'], status_file)
-        if not os.path.exists(status_path):
-            return jsonify({"error": "Status file not found"}), 404
-        
-        with open(status_path, 'r', encoding='utf-8') as f:
-            status_data = json.load(f)
-        
-        return jsonify(status_data)
-    
-    except Exception as e:
-        import traceback
-        print(f"Error in API status: {str(e)}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-async def run_search(analyzer, query, num_results, status_path, status_data, json_filename, timestamp, filename_query):
-    """Async function to run the search and analysis."""
-    try:
-        # Update status
-        status_data["status"] = "searching"
-        status_data["message"] = "Retrieving search results"
-        status_data["progress"] = 10
-        with open(status_path, 'w', encoding='utf-8') as f:
-            json.dump(status_data, f, indent=4)
-        
-        # Check if the analyzer has the analyze_serp_for_api method (added to bypass_serp.py)
-        if hasattr(analyzer, 'analyze_serp_for_api') and callable(getattr(analyzer, 'analyze_serp_for_api')):
-            print(f"Using analyze_serp_for_api method from BypassSerpAnalyzer for query: {query}")
-        
-            # This method does everything: search, analyze pages, and format results
-            serp_data = await analyzer.analyze_serp_for_api(query, num_results)
-            
-            # Update status
-            status_data["status"] = "analyzing"
-            status_data["message"] = "Running AI analysis on search results"
-            status_data["progress"] = 50
-            with open(status_path, 'w', encoding='utf-8') as f:
-                json.dump(status_data, f, indent=4)
-            
-            # Now pass the data to the original SEO analyzer for AI analysis
-            try:
-                print("Passing data to SEO analyzer for AI analysis...")
-                
-                # Use the original SEO analyzer to perform AI analysis
-                serp_data_with_analysis = seo_analyzer.analyze_seo_with_gemini(serp_data)
-                
-                # Update status
-                status_data["status"] = "comparing"
-                status_data["message"] = "Creating comparative analysis"
-                status_data["progress"] = 80
-                with open(status_path, 'w', encoding='utf-8') as f:
-                    json.dump(status_data, f, indent=4)
-                
-                # Also create a comparative analysis
-                comparative_analysis = seo_analyzer.create_seo_comparative_analysis(serp_data_with_analysis)
-                serp_data_with_analysis['comparative_analysis'] = comparative_analysis
-                if hasattr(analyzer, 'analyze_serp_for_api') and callable(getattr(analyzer, 'analyze_serp_for_api')):
-                    print(f"Using analyze_serp_for_api method from BypassSerpAnalyzer for query: {query}")
-                
-                    # This method does everything: search, analyze pages, and format results
-                    serp_data = await analyzer.analyze_serp_for_api(query, num_results)
-                    
-                    # Update status
-                    status_data["status"] = "analyzing"
-                    status_data["message"] = "Running AI analysis on search results"
-                    status_data["progress"] = 50
-                    with open(status_path, 'w', encoding='utf-8') as f:
-                        json.dump(status_data, f, indent=4)
-                    
-                    # Now pass the data to the original SEO analyzer for AI analysis
-                    try:
-                        print("Passing data to SEO analyzer for AI analysis...")
-                        
-                        # Use the original SEO analyzer to perform AI analysis
-                        serp_data_with_analysis = seo_analyzer.analyze_seo_with_gemini(serp_data)
-                        
-                        # Update status
-                        status_data["status"] = "comparing"
-                        status_data["message"] = "Creating comparative analysis"
-                        status_data["progress"] = 80
-                        with open(status_path, 'w', encoding='utf-8') as f:
-                            json.dump(status_data, f, indent=4)
-                        
-                        # Also create a comparative analysis
-                        comparative_analysis = seo_analyzer.create_seo_comparative_analysis(serp_data_with_analysis)
-                        serp_data_with_analysis['comparative_analysis'] = comparative_analysis
-                        
-                        print("AI SEO analysis completed successfully")
-                    except Exception as e:
-                        print(f"Error in AI SEO analysis: {str(e)}")
-                        
-                        # Continue even if AI analysis fails
-                        serp_data_with_analysis = serp_data
-                        serp_data_with_analysis['ai_analysis_error'] = str(e)
-                    
-                    # Add file information
-                    serp_data_with_analysis['files'] = {
-                        "json": json_filename,
-                        "csv": f"{filename_query}_{timestamp}.csv"
-                    }
-                    
-                    # Save the results
-                    json_path = os.path.join(app.config['RESULTS_FOLDER'], json_filename)
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(serp_data_with_analysis, f, indent=4, ensure_ascii=False)
-                    
-                    # Update status to completed
-                    status_data["status"] = "completed"
-                    status_data["message"] = "Analysis completed successfully"
-                    status_data["progress"] = 100
-                    status_data["result_file"] = json_filename
-                    with open(status_path, 'w', encoding='utf-8') as f:
-                        json.dump(status_data, f, indent=4)
-                    
-                    return serp_data_with_analysis
-                
-            except Exception as e:
-                print(f"Error in run_search: {str(e)}")
-                
-                # Update status to error
-                status_data["status"] = "error"
-                status_data["message"] = f"Error: {str(e)}"
-                with open(status_path, 'w', encoding='utf-8') as f:
-                    json.dump(status_data, f, indent=4)
-                raise
+        # Define the async function that will run in the event loop
+        async def run_search():
+            # Check if the analyzer has the analyze_serp_for_api method (added to bypass_serp.py)
+            if hasattr(analyzer, 'analyze_serp_for_api') and callable(getattr(analyzer, 'analyze_serp_for_api')):
+                print(f"Using analyze_serp_for_api method from BypassSerpAnalyzer for query: {query}")
+                # This method does everything: search, analyze pages, and format results
+                return await analyzer.analyze_serp_for_api(query, num_results)
             
             # Fallback to our implementation if analyze_serp_for_api is not available
             print(f"Fallback: Using search_google + analyze_page for query: {query}")
@@ -1250,42 +1078,6 @@ async def analyze_page(url, session):
         print(f"Error analyzing {url}: {str(e)}")
         return {"url": url, "error": str(e)}
 
-
-# ===========================
-# Status and Results Endpoints
-# ===========================
-
-@app.route('/api/status/<filename>', methods=['GET'])
-def check_status(filename):
-    """API endpoint to check the status of a long-running search operation."""
-    try:
-        status_path = os.path.join(app.config['RESULTS_FOLDER'], filename)
-        if not os.path.exists(status_path):
-            return jsonify({"error": "Status file not found"}), 404
-        
-        with open(status_path, 'r', encoding='utf-8') as f:
-            status_data = json.load(f)
-        
-        return jsonify(status_data)
-    except Exception as e:
-        print(f"Error checking status: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/results/<filename>', methods=['GET'])
-def get_results(filename):
-    """API endpoint to get the results of a completed search operation."""
-    try:
-        results_path = os.path.join(app.config['RESULTS_FOLDER'], filename)
-        if not os.path.exists(results_path):
-            return jsonify({"error": "Results file not found"}), 404
-        
-        with open(results_path, 'r', encoding='utf-8') as f:
-            results_data = json.load(f)
-        
-        return jsonify(results_data)
-    except Exception as e:
-        print(f"Error getting results: {str(e)}")
-        return jsonify({"error": str(e)}), 500
 
 # ===========================
 # Main Execution

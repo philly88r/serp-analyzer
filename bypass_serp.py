@@ -12,7 +12,6 @@ import logging
 from datetime import datetime
 import aiohttp
 from urllib.parse import urlparse, urljoin
-import json
 
 # Configure logging
 logging.basicConfig(
@@ -148,7 +147,8 @@ class BypassSerpAnalyzer:
 
     async def analyze_page(self, url, session):
         """
-        Analyze a page for SEO metrics
+        Analyze a single page for SEO data.
+        Uses aiohttp for asynchronous requests.
         """
         headers = {
             "User-Agent": self._get_random_user_agent(),
@@ -162,302 +162,180 @@ class BypassSerpAnalyzer:
             async with session.get(url, headers=headers, timeout=20) as response:
                 if response.status != 200:
                     logger.warning(f"Failed to fetch {url}, status: {response.status}")
-                    return {"url": url, "title": "", "meta_description": "", "error": f"HTTP {response.status}"}
+                    return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
                 
                 html_content = await response.text()
                 soup = BeautifulSoup(html_content, "html.parser")
                 
-                # Basic data
                 title = soup.title.string.strip() if soup.title else ""
-                
-                # Meta description
                 description_tag = soup.find("meta", attrs={"name": "description"})
-                meta_description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
+                description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
                 
-                # Meta keywords
                 meta_keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
-                meta_keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else ""
-                
-                # Headings
+                keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else ""
+
                 h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
                 h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
                 h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
-                h4_tags = [h4.get_text(strip=True) for h4 in soup.find_all('h4')]
-                h5_tags = [h5.get_text(strip=True) for h5 in soup.find_all('h5')]
-                h6_tags = [h6.get_text(strip=True) for h6 in soup.find_all('h6')]
-                
-                # Links analysis
-                internal_links = []
-                external_links = []
+
+                links_data = []
                 page_domain = urlparse(url).netloc
-                
                 for link in soup.find_all('a', href=True):
                     href = link['href']
                     text = link.get_text(strip=True)
-                    rel = link.get('rel', [])
-                    nofollow = 'nofollow' in rel if rel else False
-                    
-                    # Process URL
+                    is_internal = False
                     try:
+                        link_domain = urlparse(href).netloc
+                        if not link_domain or link_domain == page_domain:
+                            is_internal = True
+                        # Ensure full URL for relative links
                         if href.startswith('/'):
-                            full_url = urljoin(url, href)
-                            is_internal = True
+                           href = urljoin(url, href)
                         elif not href.startswith(('http://', 'https://')):
-                            full_url = urljoin(url + ('/' if not url.endswith('/') else ''), href)
-                            is_internal = True
-                        else:
-                            full_url = href
-                            link_domain = urlparse(href).netloc
-                            is_internal = link_domain == page_domain
-                        
-                        link_data = {
-                            'url': full_url,
-                            'text': text,
-                            'nofollow': nofollow
-                        }
-                        
-                        if is_internal:
-                            internal_links.append(link_data)
-                        else:
-                            external_links.append(link_data)
+                           href = urljoin(url + ('/' if not url.endswith('/') else ''), href)
                     except Exception:
-                        # If URL parsing fails, skip this link
-                        pass
+                        # If URL parsing fails, assume external or problematic
+                        pass 
+                        
+                    links_data.append({
+                        'text': text,
+                        'url': href,
+                        'is_internal': is_internal
+                    })
                 
-                # Images analysis
-                images = []
-                images_with_alt_count = 0
-                
+                internal_links_count = sum(1 for link in links_data if link['is_internal'])
+                external_links_count = len(links_data) - internal_links_count
+
+                images_data = []
                 for img in soup.find_all('img'):
                     src = img.get('src', '')
                     alt = img.get('alt', '')
-                    
                     # Ensure full URL for relative image src
                     if src:
                         if src.startswith('/'):
                             src = urljoin(url, src)
                         elif not src.startswith(('http://', 'https://')):
                             src = urljoin(url + ('/' if not url.endswith('/') else ''), src)
-                    
-                    if alt:
-                        images_with_alt_count += 1
-                    
-                    images.append({'src': src, 'alt': alt})
+                    images_data.append({'src': src, 'alt': alt})
                 
-                # Schema.org structured data
-                schema_data = []
-                for script in soup.find_all('script', type='application/ld+json'):
-                    try:
-                        schema_json = json.loads(script.string)
-                        if isinstance(schema_json, dict):
-                            schema_type = schema_json.get('@type', 'Unknown')
-                            schema_data.append({
-                                'type': schema_type,
-                                'properties': schema_json
-                            })
-                        elif isinstance(schema_json, list):
-                            for item in schema_json:
-                                if isinstance(item, dict):
-                                    schema_type = item.get('@type', 'Unknown')
-                                    schema_data.append({
-                                        'type': schema_type,
-                                        'properties': item
-                                    })
-                    except Exception:
-                        # If JSON parsing fails, skip this schema
-                        pass
-                
-                # Content analysis
+                images_with_alt_count = sum(1 for img in images_data if img['alt'])
+
                 body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
                 word_count = len(body_text.split()) if body_text else 0
                 content_sample = " ".join(body_text.split()[:150]) # First 150 words
-                
-                # Keyword analysis (basic)
-                keyword = ""  # This would typically come from the search query
-                keyword_count = body_text.lower().count(keyword.lower()) if keyword and body_text else 0
-                keyword_density = (keyword_count / word_count * 100) if word_count > 0 and keyword_count > 0 else 0
-                
+
                 logger.info(f"Successfully analyzed: {url}, Title: {title[:50]}...")
-                
-                # Return data in a format compatible with the original SEO analyzer
                 return {
                     "url": url,
                     "title": title,
-                    "meta_description": meta_description,
-                    "meta_keywords": meta_keywords,
-                    "h1_tags": h1_tags,
-                    "h2_tags": h2_tags,
-                    "h3_tags": h3_tags,
-                    "h4_tags": h4_tags,
-                    "h5_tags": h5_tags,
-                    "h6_tags": h6_tags,
-                    "h1_count": len(h1_tags),
-                    "h2_count": len(h2_tags),
-                    "h3_count": len(h3_tags),
-                    "h4_count": len(h4_tags),
-                    "h5_count": len(h5_tags),
-                    "h6_count": len(h6_tags),
-                    "word_count": word_count,
-                    "internal_links_count": len(internal_links),
-                    "external_links_count": len(external_links),
-                    "internal_links": internal_links,
-                    "external_links": external_links,
-                    "images_count": len(images),
-                    "images_with_alt_count": images_with_alt_count,
-                    "schema_count": len(schema_data),
-                    "schema_data": schema_data,
-                    "keyword": keyword,
-                    "keyword_count": keyword_count,
-                    "keyword_density": keyword_density,
-                    "content_sample": content_sample,
-                    "error": None
+                    "description": description,
+                    "keywords": keywords,
+                    "headings": {
+                        "h1": h1_tags,
+                        "h2": h2_tags,
+                        "h3": h3_tags
+                    },
+                    "links": {
+                        "total": len(links_data),
+                        "internal": internal_links_count,
+                        "external": external_links_count,
+                        "sample": links_data[:10] 
+                    },
+                    "images": {
+                        "total": len(images_data),
+                        "with_alt": images_with_alt_count,
+                        "without_alt": len(images_data) - images_with_alt_count,
+                        "sample": images_data[:5]
+                    },
+                    "content": {
+                        "word_count": word_count,
+                        "sample": content_sample
+                    },
+                    "error": None # Explicitly set error to None on success
                 }
         except asyncio.TimeoutError:
             logger.warning(f"Timeout analyzing page: {url}")
-            return {"url": url, "title": "", "meta_description": "", "error": "Timeout"}
+            return {"url": url, "title": "", "description": "", "error": "Timeout", "seo_details": {}}
         except Exception as e:
             logger.error(f"Error analyzing page {url}: {str(e)}", exc_info=True)
-            return {"url": url, "title": "", "meta_description": "", "error": str(e)}
+            return {"url": url, "title": "", "description": "", "error": str(e), "seo_details": {}}
 
     async def analyze_serp_for_api(self, query, num_results=10):
         """
-        Analyze SERP results for API
-        
-        Args:
-            query: Search query
-            num_results: Number of results to return
-            
-        Returns:
-            dict: SERP analysis results
+        Perform SERP analysis for the API: search, analyze pages, save, and return results.
         """
-        try:
-            logger.info(f"Analyzing SERP for query: {query}, num_results: {num_results}")
-            
-            # Get raw search results
-            raw_search_results = await self.search_google(query, num_results)
-            
-            # Process results
-            results = []
-            async with aiohttp.ClientSession() as session:
-                for result in raw_search_results:
-                    url = result.get("url")
-                    if not url:
-                        continue
-                    
-                    # Add basic info from search results
-                    processed_result = {
-                        "url": url,
-                        "title": result.get("title", ""),
-                        "description": result.get("description", ""),
-                        "position": result.get("position", 0),
-                    }
-                    
-                    # Analyze the page
-                    try:
-                        page_analysis = await self.analyze_page(url, session)
-                        # Update with page analysis data
-                        processed_result.update(page_analysis)
-                        # Set keyword to the search query for keyword analysis
-                        processed_result["keyword"] = query
-                        # Recalculate keyword metrics with the actual query
-                        if "content_sample" in processed_result and processed_result["content_sample"]:
-                            body_text = processed_result["content_sample"]
-                            word_count = processed_result.get("word_count", 0)
-                            keyword_count = body_text.lower().count(query.lower()) if query and body_text else 0
-                            keyword_density = (keyword_count / word_count * 100) if word_count > 0 and keyword_count > 0 else 0
-                            processed_result["keyword_count"] = keyword_count
-                            processed_result["keyword_density"] = keyword_density
-                    except Exception as e:
-                        logger.error(f"Error analyzing page {url}: {str(e)}", exc_info=True)
-                        processed_result["error"] = str(e)
-                    
-                    results.append(processed_result)
-            
-            # Format the response similar to the original SEO analyzer
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            response = {
-                "query": query,
-                "timestamp": timestamp,
-                "results": results,
-                "num_results": len(results)
-            }
-            
-            logger.info(f"SERP analysis completed for query: {query}, found {len(results)} results")
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error in analyze_serp_for_api: {str(e)}", exc_info=True)
-            return {
-                "query": query,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "results": [],
-                "num_results": 0,
-                "error": str(e)
-            }
-            
-    def save_results(self, data, results_dir="results"):
-        """
-        Save search results to JSON and CSV files
-        
-        Args:
-            data: Search results data
-            results_dir: Directory to save results in
-            
-        Returns:
-            dict: File paths for JSON and CSV files
-        """
-        try:
-            # Create results directory if it doesn't exist
-            os.makedirs(results_dir, exist_ok=True)
-            
-            # Generate filenames
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            query_slug = re.sub(r'\W+', '_', data.get('query', 'unknown'))
-            json_filename = f"serp_{query_slug}_{timestamp}.json"
-            csv_filename = f"serp_{query_slug}_{timestamp}.csv"
-            
-            # Save JSON file
-            json_path = os.path.join(results_dir, json_filename)
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-            
-            # Save CSV file
-            csv_path = os.path.join(results_dir, csv_filename)
-            with open(csv_path, 'w', encoding='utf-8', newline='') as f:
-                # Create CSV writer
-                import csv
-                writer = csv.writer(f)
-                
-                # Write header
-                header = ['Position', 'URL', 'Title', 'Description', 'Word Count', 'Internal Links', 'External Links']
-                writer.writerow(header)
-                
-                # Write data rows
-                for result in data.get('results', []):
-                    row = [
-                        result.get('position', ''),
-                        result.get('url', ''),
-                        result.get('title', ''),
-                        result.get('meta_description', result.get('description', '')),
-                        result.get('word_count', ''),
-                        result.get('internal_links_count', ''),
-                        result.get('external_links_count', '')
-                    ]
-                    writer.writerow(row)
-            
-            logger.info(f"Saved results to {json_path} and {csv_path}")
-            
-            return {
-                'json': json_filename,
-                'csv': csv_filename
-            }
-            
-        except Exception as e:
-            logger.error(f"Error saving results: {str(e)}", exc_info=True)
-            return {
-                'error': str(e)
-            }
+        logger.info(f"Starting API SERP analysis for query: '{query}' with {num_results} results")
+        raw_search_results = await self.search_google(query, num_results)
 
+        analyzed_pages = []
+        if not raw_search_results:
+            logger.warning(f"No search results returned from search_google for query: {query}")
+        else:
+            # Use aiohttp.ClientSession for concurrent page fetching in analyze_page
+            async with aiohttp.ClientSession() as http_session:
+                tasks = []
+                for result in raw_search_results:
+                    if result.get('url'):
+                        tasks.append(self.analyze_page(result['url'], http_session))
+                
+                # Gather results from all analyze_page tasks
+                # Use return_exceptions=True to prevent one failed task from stopping others
+                page_analysis_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for i, analyzed_data in enumerate(page_analysis_results):
+                    original_result = raw_search_results[i] # Assuming order is maintained
+                    if isinstance(analyzed_data, Exception):
+                        logger.error(f"Exception during page analysis for {original_result.get('url')}: {analyzed_data}")
+                        analyzed_pages.append({
+                            "url": original_result.get('url'),
+                            "title": original_result.get('title', 'N/A'),
+                            "description": original_result.get('snippet', 'Failed to analyze page details.'),
+                            "error_detail": str(analyzed_data)
+                        })
+                    elif analyzed_data:
+                        # Merge raw search result data (like original snippet if analysis fails for description)
+                        # with detailed analyzed data. Analyzed data takes precedence for common fields.
+                        merged_data = {**original_result, **analyzed_data} 
+                        analyzed_pages.append(merged_data)
+                    else:
+                        # Fallback if analyze_page somehow returns None but not an exception
+                         analyzed_pages.append({
+                            "url": original_result.get('url'),
+                            "title": original_result.get('title', 'N/A'),
+                            "description": original_result.get('snippet', 'Page analysis returned no data.'),
+                        })
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename_query = re.sub(r'\W+', '_', query) # Sanitize query for filename
+        base_filename = f"{filename_query}_{timestamp}"
+        json_filename = f"{base_filename}.json"
+        
+        # Prepare final results structure for API response
+        output_data = {
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "num_requested": num_results,
+            "num_returned_search": len(raw_search_results if raw_search_results else []),
+            "num_analyzed_pages": len(analyzed_pages),
+            "results": analyzed_pages,
+            "files": {
+                "json": json_filename,
+                # "csv": f"{base_filename}.csv" # Placeholder for CSV
+            }
+        }
+
+        # Save to JSON file
+        json_filepath = os.path.join("results", json_filename)
+        try:
+            with open(json_filepath, "w", encoding="utf-8") as f:
+                json.dump(output_data, f, indent=4, ensure_ascii=False)
+            logger.info(f"Successfully saved results to {json_filepath}")
+        except Exception as e:
+            logger.error(f"Error saving results to JSON {json_filepath}: {e}")
+            # Still return data even if save fails
+
+        return output_data
+    
     async def _search_with_duckduckgo(self, query, num_results=6):
         """
         Search using DuckDuckGo as a proxy to get Google-like results.
@@ -565,28 +443,14 @@ class BypassSerpAnalyzer:
             # Respect rate limits
             self._respect_rate_limits()
             
-            # Construct the search URL with randomized parameters
+            # Construct the search URL
             params = {
                 "q": query,
                 "count": num_results * 2,  # Request more results than needed
                 "setlang": "en-US"
             }
             
-            # Add random parameters to avoid detection patterns
-            if random.random() < 0.5:
-                params["safe"] = "off"
-            
-            if random.random() < 0.7:
-                params["source"] = "hp"
-            
-            # Randomize the order of parameters
-            param_items = list(params.items())
-            random.shuffle(param_items)
-            shuffled_params = dict(param_items)
-            
-            # Build the query string
-            query_string = "&".join([f"{k}={v}" for k, v in shuffled_params.items()])
-            search_url = f"https://www.bing.com/search?{query_string}"
+            search_url = f"https://www.bing.com/search?{urlencode(params)}"
             
             logger.info(f"Making Bing request to: {search_url}")
             
