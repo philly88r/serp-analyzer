@@ -853,7 +853,7 @@ def api_search():
             
             return jsonify(output_data)
         
-        # For real queries, use the SerpAnalyzer
+        # For real queries, use the SerpAnalyzer (which is actually BypassSerpAnalyzer)
         # Initialize the analyzer
         analyzer = SerpAnalyzer()
         
@@ -863,6 +863,14 @@ def api_search():
         
         # Define the async function that will run in the event loop
         async def run_search():
+            # Check if the analyzer has the analyze_serp_for_api method (added to bypass_serp.py)
+            if hasattr(analyzer, 'analyze_serp_for_api') and callable(getattr(analyzer, 'analyze_serp_for_api')):
+                print(f"Using analyze_serp_for_api method from BypassSerpAnalyzer for query: {query}")
+                # This method does everything: search, analyze pages, and format results
+                return await analyzer.analyze_serp_for_api(query, num_results)
+            
+            # Fallback to our implementation if analyze_serp_for_api is not available
+            print(f"Fallback: Using search_google + analyze_page for query: {query}")
             # Get search results
             search_results = await analyzer.search_google(query, num_results)
             
