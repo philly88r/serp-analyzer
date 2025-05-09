@@ -62,12 +62,14 @@ try:
     # Try to import analyzers in order of preference
     try:
         from bypass_serp import BypassSerpAnalyzer as SerpAnalyzer
-        print("Bypass SERP analyzer loaded successfully - using alternative search engines to avoid CAPTCHA")
-    except ImportError:
+        logger.info("Bypass SERP analyzer loaded successfully - using alternative search engines to avoid CAPTCHA")
+    except ImportError as e:
+        logger.error(f"Could not import BypassSerpAnalyzer: {str(e)}")
         try:
             from improved_serp_analyzer import ImprovedSerpAnalyzer as SerpAnalyzer
-            print("Improved SERP analyzer loaded successfully")
-        except ImportError:
+            logger.info("Improved SERP analyzer loaded successfully")
+        except ImportError as e:
+            logger.error(f"Could not import ImprovedSerpAnalyzer: {str(e)}")
             # Fall back to the original analyzer if others are not available
             from serp_analyzer import SerpAnalyzer
             print("Original SERP analyzer loaded as fallback")
@@ -86,16 +88,36 @@ if BROWSER_AUTOMATION_AVAILABLE:
         import subprocess
         from playwright.sync_api import sync_playwright
         
-        # Configure Playwright for Heroku
+        # Configure Playwright for different environments
         is_heroku = 'DYNO' in os.environ
+        is_render = 'RENDER' in os.environ
+        
         if is_heroku:
-            print("Running on Heroku, configuring Playwright...")
+            logger.info("Running on Heroku, configuring Playwright...")
             
             # Set environment variables for Playwright on Heroku
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/.playwright'
             os.environ['PLAYWRIGHT_CHROMIUM_ARGS'] = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage'
-            print(f"Set PLAYWRIGHT_BROWSERS_PATH to {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
-            print(f"Set PLAYWRIGHT_CHROMIUM_ARGS to {os.environ.get('PLAYWRIGHT_CHROMIUM_ARGS')}")
+            logger.info(f"Set PLAYWRIGHT_BROWSERS_PATH to {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
+            logger.info(f"Set PLAYWRIGHT_CHROMIUM_ARGS to {os.environ.get('PLAYWRIGHT_CHROMIUM_ARGS')}")
+        
+        elif is_render:
+            logger.info("Running on Render, configuring Playwright...")
+            
+            # Set environment variables for Playwright on Render
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/.playwright'
+            os.environ['PLAYWRIGHT_CHROMIUM_ARGS'] = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage'
+            logger.info(f"Set PLAYWRIGHT_BROWSERS_PATH to {os.environ.get('PLAYWRIGHT_BROWSERS_PATH')}")
+            logger.info(f"Set PLAYWRIGHT_CHROMIUM_ARGS to {os.environ.get('PLAYWRIGHT_CHROMIUM_ARGS')}")
+            
+            # Log all environment variables related to Playwright for debugging
+            logger.info("Environment variables related to Playwright on Render:")
+            for key, value in os.environ.items():
+                if any(term in key.upper() for term in ['PLAYWRIGHT', 'CHROME', 'BROWSER', 'PROXY']):
+                    # Mask sensitive values
+                    if any(sensitive in key.lower() for sensitive in ['key', 'secret', 'password', 'token']):
+                        value = value[:5] + '...' if value and len(value) > 5 else value
+                    logger.info(f"  {key}: {value}")
             
             # Log all environment variables related to Playwright for debugging
             print("Environment variables related to Playwright:")
