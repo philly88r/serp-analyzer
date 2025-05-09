@@ -4,6 +4,11 @@ import os
 import random
 import time
 import sys
+import io
+import cv2
+import numpy as np
+from PIL import Image
+import pytesseract
 from playwright.async_api import async_playwright
 import traceback
 from urllib.parse import quote_plus, urlencode
@@ -161,117 +166,148 @@ class BypassSerpAnalyzer:
     async def analyze_page(self, url, session):
         """
         Analyze a single page for SEO data.
-        Uses aiohttp for asynchronous requests.
+        Uses aiohttp for asynchronous requests with retry mechanism.
         """
         headers = {
             "User-Agent": self._get_random_user_agent(),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
-            "Referer": self._get_random_referrer()
+            "Referer": self._get_random_referrer(),
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
         }
-        try:
-            logger.info(f"Analyzing page: {url}")
-            self._respect_rate_limits() # Ensure we don't hit sites too fast either
-            async with session.get(url, headers=headers, timeout=45) as response:
-                if response.status != 200:
-                    logger.warning(f"Failed to fetch {url}, status: {response.status}")
-                    return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
+        
+        # Retry parameters
+        max_retries = 3
+        base_timeout = 70  # Base timeout in seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Calculate timeout with exponential backoff
+                current_timeout = base_timeout * (1.5 ** attempt)
                 
-                html_content = await response.text()
-                soup = BeautifulSoup(html_content, "html.parser")
+                if attempt > 0:
+                    logger.info(f"Retry attempt {attempt+1}/{max_retries} for {url} with timeout {current_timeout:.1f}s")
+                else:
+                    logger.info(f"Analyzing page: {url} with timeout {current_timeout:.1f}s")
                 
-                title = soup.title.string.strip() if soup.title else ""
-                description_tag = soup.find("meta", attrs={"name": "description"})
-                description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
+                self._respect_rate_limits() # Ensure we don't hit sites too fast either
                 
-                meta_keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
-                keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else ""
+                async with session.get(url, headers=headers, timeout=current_timeout) as response:
+                    if response.status != 200:
+                        logger.warning(f"Failed to fetch {url}, status: {response.status}")
+                        # Don't retry for non-timeout errors like 404, 403, etc.
+                        if response.status < 500:
+                            return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
+                        # For server errors (5xx), continue to retry loop
+                        continue
+                    
+                    # If we got a successful response, process it
+                    html_content = await response.text()
+                    soup = BeautifulSoup(html_content, "html.parser")
+                    
+                    title = soup.title.string.strip() if soup.title else ""
+                    description_tag = soup.find("meta", attrs={"name": "description"})
+                    description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
+                    
+                    meta_keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
+                    keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else ""
 
-                h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
-                h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
-                h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
+                    h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
+                    h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
+                    h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
 
-                links_data = []
-                page_domain = urlparse(url).netloc
-                for link in soup.find_all('a', href=True):
-                    href = link['href']
-                    text = link.get_text(strip=True)
-                    is_internal = False
-                    try:
-                        link_domain = urlparse(href).netloc
-                        if not link_domain or link_domain == page_domain:
-                            is_internal = True
-                        # Ensure full URL for relative links
-                        if href.startswith('/'):
-                           href = urljoin(url, href)
-                        elif not href.startswith(('http://', 'https://')):
-                           href = urljoin(url + ('/' if not url.endswith('/') else ''), href)
-                    except Exception:
-                        # If URL parsing fails, assume external or problematic
-                        pass 
-                        
-                    links_data.append({
-                        'text': text,
-                        'url': href,
-                        'is_internal': is_internal
-                    })
-                
-                internal_links_count = sum(1 for link in links_data if link['is_internal'])
-                external_links_count = len(links_data) - internal_links_count
+                    links_data = []
+                    page_domain = urlparse(url).netloc
+                    for link in soup.find_all('a', href=True):
+                        href = link['href']
+                        text = link.get_text(strip=True)
+                        is_internal = False
+                        try:
+                            link_domain = urlparse(href).netloc
+                            if not link_domain or link_domain == page_domain:
+                                is_internal = True
+                            # Ensure full URL for relative links
+                            if href.startswith('/'):
+                               href = urljoin(url, href)
+                            elif not href.startswith(('http://', 'https://')):
+                               href = urljoin(url + ('/' if not url.endswith('/') else ''), href)
+                        except Exception:
+                            # If URL parsing fails, assume external or problematic
+                            pass 
+                            
+                        links_data.append({
+                            'text': text,
+                            'url': href,
+                            'is_internal': is_internal
+                        })
+                    
+                    internal_links_count = sum(1 for link in links_data if link['is_internal'])
+                    external_links_count = len(links_data) - internal_links_count
 
-                images_data = []
-                for img in soup.find_all('img'):
-                    src = img.get('src', '')
-                    alt = img.get('alt', '')
-                    # Ensure full URL for relative image src
-                    if src:
-                        if src.startswith('/'):
-                            src = urljoin(url, src)
-                        elif not src.startswith(('http://', 'https://')):
-                            src = urljoin(url + ('/' if not url.endswith('/') else ''), src)
-                    images_data.append({'src': src, 'alt': alt})
-                
-                images_with_alt_count = sum(1 for img in images_data if img['alt'])
+                    images_data = []
+                    for img in soup.find_all('img'):
+                        src = img.get('src', '')
+                        alt = img.get('alt', '')
+                        # Ensure full URL for relative image src
+                        if src:
+                            if src.startswith('/'):
+                                src = urljoin(url, src)
+                            elif not src.startswith(('http://', 'https://')):
+                                src = urljoin(url + ('/' if not url.endswith('/') else ''), src)
+                        images_data.append({'src': src, 'alt': alt})
+                    
+                    images_with_alt_count = sum(1 for img in images_data if img['alt'])
 
-                body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
-                word_count = len(body_text.split()) if body_text else 0
-                content_sample = " ".join(body_text.split()[:150]) # First 150 words
+                    body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
+                    word_count = len(body_text.split()) if body_text else 0
+                    content_sample = " ".join(body_text.split()[:150]) # First 150 words
 
-                logger.info(f"Successfully analyzed: {url}, Title: {title[:50]}...")
-                return {
-                    "url": url,
-                    "title": title,
-                    "description": description,
-                    "keywords": keywords,
-                    "headings": {
-                        "h1": h1_tags,
-                        "h2": h2_tags,
-                        "h3": h3_tags
-                    },
-                    "links": {
-                        "total": len(links_data),
-                        "internal": internal_links_count,
-                        "external": external_links_count,
-                        "sample": links_data[:10] 
-                    },
-                    "images": {
-                        "total": len(images_data),
-                        "with_alt": images_with_alt_count,
-                        "without_alt": len(images_data) - images_with_alt_count,
-                        "sample": images_data[:5]
-                    },
-                    "content": {
-                        "word_count": word_count,
-                        "sample": content_sample
-                    },
-                    "error": None # Explicitly set error to None on success
-                }
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout analyzing page: {url}")
-            return {"url": url, "title": "", "description": "", "error": "Timeout", "seo_details": {}}
-        except Exception as e:
-            logger.error(f"Error analyzing page {url}: {str(e)}", exc_info=True)
-            return {"url": url, "title": "", "description": "", "error": str(e), "seo_details": {}}
+                    logger.info(f"Successfully analyzed: {url}, Title: {title[:50]}...")
+                    return {
+                        "url": url,
+                        "title": title,
+                        "description": description,
+                        "keywords": keywords,
+                        "headings": {
+                            "h1": h1_tags,
+                            "h2": h2_tags,
+                            "h3": h3_tags
+                        },
+                        "links": {
+                            "total": len(links_data),
+                            "internal": internal_links_count,
+                            "external": external_links_count,
+                            "sample": links_data[:10] 
+                        },
+                        "images": {
+                            "total": len(images_data),
+                            "with_alt": images_with_alt_count,
+                            "without_alt": len(images_data) - images_with_alt_count,
+                            "sample": images_data[:5]
+                        },
+                        "content": {
+                            "word_count": word_count,
+                            "sample": content_sample
+                        },
+                        "error": None # Explicitly set error to None on success
+                    }
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout on attempt {attempt+1}/{max_retries} for {url}")
+                if attempt == max_retries - 1:  # If this was the last attempt
+                    return {"url": url, "title": "", "description": "", "error": "Timeout after multiple attempts", "seo_details": {}}
+                # Otherwise continue to the next retry attempt
+                continue
+            except Exception as e:
+                logger.error(f"Error on attempt {attempt+1}/{max_retries} for {url}: {str(e)}")
+                if attempt == max_retries - 1:  # If this was the last attempt
+                    return {"url": url, "title": "", "description": "", "error": str(e), "seo_details": {}}
+                # Otherwise continue to the next retry attempt
+                continue
+        
+        # This should only be reached if all retries failed but didn't raise exceptions
+        return {"url": url, "title": "", "description": "", "error": "All retry attempts failed", "seo_details": {}}
 
     async def analyze_serp_for_api(self, query, num_results=10):
         """
@@ -591,11 +627,32 @@ class BypassSerpAnalyzer:
                 
                 logger.info(f"Navigating to: {search_url}")
                 
-                # Navigate to the search URL
-                await page.goto(search_url, wait_until="networkidle")
+                # Navigate to the search URL with a longer timeout
+                try:
+                    await page.goto(search_url, wait_until="load", timeout=30000)
+                except Exception as e:
+                    logger.warning(f"Page navigation timeout: {str(e)}")
+                    # Continue anyway as the page might have partially loaded
                 
-                # Wait for search results to load
-                await page.wait_for_selector("#search", timeout=10000)
+                # Wait a moment for any JavaScript to execute
+                await asyncio.sleep(2)
+                
+                # Try multiple selectors that are likely to exist in any Google response
+                selectors_to_try = ["#search", "#main", "#center_col", "body", "#rcnt"]
+                found_selector = None
+                
+                for selector in selectors_to_try:
+                    try:
+                        # Use a shorter timeout for each individual selector
+                        await page.wait_for_selector(selector, timeout=5000)
+                        found_selector = selector
+                        logger.info(f"Found selector: {selector}")
+                        break
+                    except Exception:
+                        continue
+                
+                if not found_selector:
+                    logger.warning("Could not find any expected selectors on the page")
                 
                 # Save screenshot for debugging
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -610,22 +667,144 @@ class BypassSerpAnalyzer:
                     f.write(html_content)
                 logger.info(f"Saved HTML to {debug_file} for debugging")
                 
-                # Check for CAPTCHA
-                if await page.query_selector("#captcha-form") or "captcha" in html_content.lower():
-                    logger.warning("CAPTCHA detected on Google search page")
+                # Check for CAPTCHA or other anti-bot measures
+                captcha_indicators = [
+                    "#captcha-form", 
+                    "form[action*='captcha']", 
+                    "img[src*='captcha']",
+                    "div.g-recaptcha",
+                    "#recaptcha"
+                ]
+                
+                captcha_detected = False
+                captcha_element = None
+                
+                for indicator in captcha_indicators:
+                    captcha_element = await page.query_selector(indicator)
+                    if captcha_element:
+                        logger.warning(f"CAPTCHA detected on Google search page via selector: {indicator}")
+                        captcha_detected = True
+                        break
+                
+                # Also check content for common CAPTCHA phrases
+                if not captcha_detected:
+                    captcha_phrases = ["captcha", "unusual traffic", "automated queries", "verify you're a human"]
+                    for phrase in captcha_phrases:
+                        if phrase in html_content.lower():
+                            logger.warning(f"CAPTCHA detected on Google search page via phrase: {phrase}")
+                            captcha_detected = True
+                            break
+                
+                # If CAPTCHA is detected, try to solve it
+                if captcha_detected:
                     self.captcha_detected = True
                     self.block_count += 1
-                    await browser.close()
-                    return []
+                    
+                    # Try to solve the CAPTCHA
+                    try:
+                        solved = await self._solve_captcha(page)
+                        if solved:
+                            logger.info("Successfully solved CAPTCHA!")
+                            # Wait for page to load after CAPTCHA solution
+                            await asyncio.sleep(3)
+                            # Get updated HTML content
+                            html_content = await page.content()
+                            debug_file = f"debug/google_after_captcha_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+                            with open(debug_file, "w", encoding="utf-8") as f:
+                                f.write(html_content)
+                            logger.info(f"Saved post-CAPTCHA HTML to {debug_file}")
+                        else:
+                            logger.warning("Failed to solve CAPTCHA")
+                            await browser.close()
+                            return []
+                    except Exception as e:
+                        logger.error(f"Error solving CAPTCHA: {str(e)}")
+                        await browser.close()
+                        return []
                 
                 # Extract search results
                 results = []
                 
                 # Try multiple selectors for search result containers
+                # First, try a more general approach to find all search results
+                try:
+                    # This JavaScript will find all likely search result containers
+                    general_results = await page.evaluate("""
+                        function() {
+                            const results = [];
+                            
+                            // Find all elements that look like search results
+                            // Look for elements with titles (h3) and links
+                            const h3Elements = Array.from(document.querySelectorAll('h3'));
+                            
+                            h3Elements.forEach(function(h3, index) {
+                                // Find the closest anchor tag
+                                const linkElement = h3.closest('a') || h3.querySelector('a') || h3.parentElement.querySelector('a');
+                                if (!linkElement) return;
+                                
+                                const url = linkElement.href;
+                                if (!url || !url.startsWith('http') || url.includes('google.com/search')) return;
+                                
+                                const title = h3.textContent.trim();
+                                if (!title) return;
+                                
+                                // Try to find a description near this title
+                                // Look for nearby paragraphs or divs with text
+                                let description = "";
+                                let container = h3.parentElement;
+                                for (let i = 0; i < 3; i++) { // Go up to 3 levels up to find a container
+                                    if (!container) break;
+                                    
+                                    // Look for text nodes or paragraphs in this container
+                                    const textElements = Array.from(container.querySelectorAll('p, div, span')).filter(function(el) {
+                                        // Filter out elements that are part of the title
+                                        return !el.contains(h3) && 
+                                               el.textContent.trim().length > 20 && // Must have some substantial text
+                                               !el.querySelector('h3'); // Shouldn't contain other titles
+                                    });
+                                    
+                                    if (textElements.length > 0) {
+                                        description = textElements[0].textContent.trim();
+                                        break;
+                                    }
+                                    
+                                    container = container.parentElement;
+                                }
+                                
+                                results.push({
+                                    title: title,
+                                    url: url,
+                                    description: description,
+                                    position: index + 1
+                                });
+                            });
+                            
+                            return results.filter(function(r) { return r.url && r.title; }); // Ensure we have at least URL and title
+                        }
+                    """)
+                    
+                    if general_results and len(general_results) > 0:
+                        logger.info(f"Found {len(general_results)} results using general approach")
+                        for item in general_results:
+                            # Add query to each result
+                            item["query"] = query
+                            results.append(item)
+                        
+                        # If we found enough results, return them
+                        if len(results) >= num_results:
+                            results = results[:num_results]  # Limit to requested number
+                            await browser.close()
+                            return results
+                except Exception as e:
+                    logger.error(f"Error with general search results extraction: {str(e)}")
+                
+                # If general approach didn't work, try specific selectors
                 selectors = [
                     "div.g", "div.kvH3mc", "div.Ww4FFb", "div.Gx5Zad", "div.MjjYud",
                     "div.tF2Cxc", "div.yuRUbf", "div.rc", 
-                    "div[data-header-feature]", "div[jscontroller][data-hveid]"
+                    "div[data-header-feature]", "div[jscontroller][data-hveid]",
+                    "div[data-hveid]", "div.v7W49e", "div.ULSxyf", "div.hlcw0c",
+                    "div.MjjYud", "div.g.Ww4FFb.vt6azd.tF2Cxc", "div.jtfYYd"
                 ]
                 
                 for selector in selectors:
@@ -699,6 +878,131 @@ class BypassSerpAnalyzer:
             logger.error(f"Error in Playwright Google search: {str(e)}")
             traceback.print_exc()
             return []
+    
+    async def _solve_captcha(self, page):
+        """
+        Attempt to solve Google CAPTCHA using OCR and image processing.
+        
+        Args:
+            page: Playwright page object with CAPTCHA loaded
+            
+        Returns:
+            bool: True if CAPTCHA was solved, False otherwise
+        """
+        try:
+            logger.info("Attempting to solve CAPTCHA using OCR")
+            
+            # First, try to find the image CAPTCHA
+            captcha_img = await page.query_selector("img[src*='captcha']")
+            if not captcha_img:
+                # Try other potential selectors
+                captcha_img = await page.query_selector("#captcha")
+            
+            if not captcha_img:
+                logger.warning("Could not find CAPTCHA image element")
+                return False
+            
+            # Take a screenshot of the CAPTCHA
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            captcha_screenshot = f"debug/captcha_{timestamp}.png"
+            await captcha_img.screenshot(path=captcha_screenshot)
+            logger.info(f"Saved CAPTCHA image to {captcha_screenshot}")
+            
+            # Process the CAPTCHA image to improve OCR accuracy
+            captcha_text = self._process_captcha_image(captcha_screenshot)
+            
+            if not captcha_text or len(captcha_text) < 4:
+                logger.warning(f"OCR failed to extract valid text from CAPTCHA: '{captcha_text}'")
+                return False
+            
+            logger.info(f"Extracted CAPTCHA text: '{captcha_text}'")
+            
+            # Find the input field for the CAPTCHA
+            input_field = await page.query_selector("input[name='captcha']")
+            if not input_field:
+                # Try other potential input field selectors
+                input_field = await page.query_selector("input[id*='captcha']")
+            
+            if not input_field:
+                logger.warning("Could not find CAPTCHA input field")
+                return False
+            
+            # Enter the CAPTCHA text
+            await input_field.fill(captcha_text)
+            
+            # Find and click the submit button
+            submit_button = await page.query_selector("input[type='submit']")
+            if not submit_button:
+                # Try other potential submit button selectors
+                submit_button = await page.query_selector("button[type='submit']")
+            
+            if not submit_button:
+                logger.warning("Could not find submit button")
+                return False
+            
+            # Click the submit button
+            await submit_button.click()
+            
+            # Wait for navigation to complete
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception as e:
+                logger.warning(f"Navigation timeout after CAPTCHA submission: {str(e)}")
+            
+            # Check if we're still on a CAPTCHA page
+            current_url = page.url
+            if "captcha" in current_url.lower():
+                logger.warning("Still on CAPTCHA page after submission, solution failed")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error solving CAPTCHA: {str(e)}")
+            traceback.print_exc()
+            return False
+    
+    def _process_captcha_image(self, image_path):
+        """
+        Process CAPTCHA image to improve OCR accuracy.
+        
+        Args:
+            image_path: Path to the CAPTCHA image
+            
+        Returns:
+            str: Extracted text from the CAPTCHA
+        """
+        try:
+            # Read the image
+            img = cv2.imread(image_path)
+            
+            # Convert to grayscale
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Apply threshold to get black and white image
+            _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+            
+            # Noise removal
+            kernel = np.ones((2, 2), np.uint8)
+            opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+            
+            # Save the processed image for debugging
+            processed_path = image_path.replace('.png', '_processed.png')
+            cv2.imwrite(processed_path, opening)
+            
+            # Use pytesseract to extract text
+            custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            text = pytesseract.image_to_string(opening, config=custom_config)
+            
+            # Clean up the text
+            text = text.strip().replace(' ', '').replace('\n', '')
+            
+            return text
+            
+        except Exception as e:
+            logger.error(f"Error processing CAPTCHA image: {str(e)}")
+            traceback.print_exc()
+            return ""
     
     async def _search_with_direct_http(self, query, num_results=6):
         """
