@@ -193,13 +193,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // Update results info
                 resultsInfo.innerHTML = `
-                    <p><strong>Query:</strong> ${data.query}</p>
-                    <p><strong>Timestamp:</strong> ${data.timestamp}</p>
-                    <p><strong>Found:</strong> ${data.results.length} results</p>
+                    <p><strong>Query:</strong> ${data.query || 'Unknown'}</p>
+                    <p><strong>Timestamp:</strong> ${data.timestamp || new Date().toISOString()}</p>
+                    <p><strong>Found:</strong> ${data.results && data.results.length ? data.results.length : 0} results</p>
                 `;
                 
                 // Update results list
                 resultsList.innerHTML = '';
+                
+                // Check if we have results
+                if (!data.results || data.results.length === 0) {
+                    resultsList.innerHTML = `
+                        <div class="alert alert-warning">
+                            <p><i class="fas fa-exclamation-triangle me-2"></i>No results found or an error occurred.</p>
+                            ${data.error ? `<p><strong>Error:</strong> ${data.error}</p>` : ''}
+                        </div>
+                    `;
+                    return;
+                }
+                
+                // Process results
                 data.results.forEach((result, index) => {
                     const resultItem = document.createElement('div');
                     resultItem.className = 'result-item';

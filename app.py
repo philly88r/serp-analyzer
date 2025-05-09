@@ -5,6 +5,7 @@ import asyncio
 import re
 import markdown
 from datetime import datetime
+from threading import Thread
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, send_from_directory
 import generate_seo_blog
 # Import serp_analyzer directly instead of serp_analyzer_working
@@ -875,11 +876,23 @@ def api_search():
             "progress": 0,
             "message": "Starting search operation"
         }
+        with open(status_path, 'w', encoding='utf-8') as f:
+            json.dump(status_data, f, indent=4)
         
-        # Run the search in a separate thread with a long timeout
-        loop = asyncio.new_event_loop()
+        # Initialize the analyzer
+        analyzer_instance = SerpAnalyzer()
+        
+        # Define a function to run the search in a separate thread
+        def run_search_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(run_search(analyzer_instance, query, num_results, status_path, status_data, json_filename, timestamp, filename_query))
+            finally:
+                loop.close()
+        
         # Run in a separate thread to avoid blocking the Flask server
-        thread = Thread(target=lambda: asyncio.run(run_search()))
+        thread = Thread(target=run_search_thread)
         thread.daemon = True
         thread.start()
         
@@ -917,7 +930,7 @@ def api_status(status_file):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-async def run_search():
+async def run_search(analyzer, query, num_results, status_path, status_data, json_filename, timestamp, filename_query):
     """Async function to run the search and analysis."""
     try:
         # Update status
