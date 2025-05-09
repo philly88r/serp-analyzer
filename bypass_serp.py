@@ -469,21 +469,25 @@ class BypassSerpAnalyzer:
                                 logger.error(f"Error in database operations: {str(e)}")
                         
                         return analysis_data
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout on attempt {attempt+1}/{max_retries} for {url}")
-                if attempt == max_retries - 1:  # If this was the last attempt
-                    return {"url": url, "title": "", "description": "", "error": "Timeout after multiple attempts", "seo_details": {}}
-                # Otherwise continue to the next retry attempt
-                continue
-            except Exception as e:
-                logger.error(f"Error on attempt {attempt+1}/{max_retries} for {url}: {str(e)}")
-                if attempt == max_retries - 1:  # If this was the last attempt
-                    return {"url": url, "title": "", "description": "", "error": str(e), "seo_details": {}}
-                # Otherwise continue to the next retry attempt
-                continue
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout on attempt {attempt+1}/{max_retries} for {url}")
+                    if attempt == max_retries - 1:  # If this was the last attempt
+                        return {"url": url, "title": "", "description": "", "error": "Timeout after multiple attempts", "seo_details": {}}
+                    # Otherwise continue to the next retry attempt
+                    continue
+                except Exception as e:
+                    logger.error(f"Error on attempt {attempt+1}/{max_retries} for {url}: {str(e)}")
+                    if attempt == max_retries - 1:  # If this was the last attempt
+                        return {"url": url, "title": "", "description": "", "error": str(e), "seo_details": {}}
+                    # Otherwise continue to the next retry attempt
+                    continue
         
-        # This should only be reached if all retries failed but didn't raise exceptions
-        return {"url": url, "title": "", "description": "", "error": "All retry attempts failed", "seo_details": {}}
+            # This should only be reached if all retries failed but didn't raise exceptions
+            return {"url": url, "title": "", "description": "", "error": "All retry attempts failed", "seo_details": {}}
+        finally:
+            # Close the session if we created it
+            if session_created and _session:
+                await _session.close()
 
     async def analyze_serp_for_api(self, query, num_results=10):
         """
