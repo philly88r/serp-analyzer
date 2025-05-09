@@ -11,6 +11,7 @@ import re
 import logging
 from datetime import datetime
 import aiohttp
+from urllib.parse import urlparse, urljoin
 
 # Configure logging
 logging.basicConfig(
@@ -161,7 +162,7 @@ class BypassSerpAnalyzer:
             async with session.get(url, headers=headers, timeout=20) as response:
                 if response.status != 200:
                     logger.warning(f"Failed to fetch {url}, status: {response.status}")
-                    return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}"}
+                    return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
                 
                 html_content = await response.text()
                 soup = BeautifulSoup(html_content, "html.parser")
@@ -170,19 +171,94 @@ class BypassSerpAnalyzer:
                 description_tag = soup.find("meta", attrs={"name": "description"})
                 description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
                 
+                meta_keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
+                keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else ""
+
+                h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
+                h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
+                h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
+
+                links_data = []
+                page_domain = urlparse(url).netloc
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    text = link.get_text(strip=True)
+                    is_internal = False
+                    try:
+                        link_domain = urlparse(href).netloc
+                        if not link_domain or link_domain == page_domain:
+                            is_internal = True
+                        # Ensure full URL for relative links
+                        if href.startswith('/'):
+                           href = urljoin(url, href)
+                        elif not href.startswith(('http://', 'https://')):
+                           href = urljoin(url + ('/' if not url.endswith('/') else ''), href)
+                    except Exception:
+                        # If URL parsing fails, assume external or problematic
+                        pass 
+                        
+                    links_data.append({
+                        'text': text,
+                        'url': href,
+                        'is_internal': is_internal
+                    })
+                
+                internal_links_count = sum(1 for link in links_data if link['is_internal'])
+                external_links_count = len(links_data) - internal_links_count
+
+                images_data = []
+                for img in soup.find_all('img'):
+                    src = img.get('src', '')
+                    alt = img.get('alt', '')
+                    # Ensure full URL for relative image src
+                    if src:
+                        if src.startswith('/'):
+                            src = urljoin(url, src)
+                        elif not src.startswith(('http://', 'https://')):
+                            src = urljoin(url + ('/' if not url.endswith('/') else ''), src)
+                    images_data.append({'src': src, 'alt': alt})
+                
+                images_with_alt_count = sum(1 for img in images_data if img['alt'])
+
+                body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
+                word_count = len(body_text.split()) if body_text else 0
+                content_sample = " ".join(body_text.split()[:150]) # First 150 words
+
                 logger.info(f"Successfully analyzed: {url}, Title: {title[:50]}...")
                 return {
                     "url": url,
                     "title": title,
                     "description": description,
-                    # TODO: Add more detailed SEO metrics (headings, word count, links etc.)
+                    "keywords": keywords,
+                    "headings": {
+                        "h1": h1_tags,
+                        "h2": h2_tags,
+                        "h3": h3_tags
+                    },
+                    "links": {
+                        "total": len(links_data),
+                        "internal": internal_links_count,
+                        "external": external_links_count,
+                        "sample": links_data[:10] 
+                    },
+                    "images": {
+                        "total": len(images_data),
+                        "with_alt": images_with_alt_count,
+                        "without_alt": len(images_data) - images_with_alt_count,
+                        "sample": images_data[:5]
+                    },
+                    "content": {
+                        "word_count": word_count,
+                        "sample": content_sample
+                    },
+                    "error": None # Explicitly set error to None on success
                 }
         except asyncio.TimeoutError:
             logger.warning(f"Timeout analyzing page: {url}")
-            return {"url": url, "title": "", "description": "", "error": "Timeout"}
+            return {"url": url, "title": "", "description": "", "error": "Timeout", "seo_details": {}}
         except Exception as e:
             logger.error(f"Error analyzing page {url}: {str(e)}", exc_info=True)
-            return {"url": url, "title": "", "description": "", "error": str(e)}
+            return {"url": url, "title": "", "description": "", "error": str(e), "seo_details": {}}
 
     async def analyze_serp_for_api(self, query, num_results=10):
         """
