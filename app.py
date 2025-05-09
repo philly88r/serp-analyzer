@@ -626,6 +626,64 @@ def delete(query):
 # API Endpoints
 # ===========================
 
+@app.route('/api/debug/<path:filename>')
+def serve_debug_file(filename):
+    """
+    Serve debug files (screenshots, HTML) for inspection.
+    This is useful for debugging CAPTCHA and other issues on Render.
+    """
+    # Security check to prevent directory traversal
+    if '..' in filename or filename.startswith('/'):
+        return jsonify({"error": "Invalid filename"}), 400
+        
+    # Set the debug directory
+    debug_dir = os.path.join(app.root_path, 'debug')
+    
+    # Check if the file exists
+    file_path = os.path.join(debug_dir, filename)
+    if not os.path.exists(file_path):
+        return jsonify({"error": "File not found", "path": file_path}), 404
+    
+    # Determine the content type based on file extension
+    if filename.endswith('.png'):
+        return send_file(file_path, mimetype='image/png')
+    elif filename.endswith('.html'):
+        return send_file(file_path, mimetype='text/html')
+    else:
+        return send_file(file_path)
+
+@app.route('/api/debug/list')
+def list_debug_files():
+    """
+    List all debug files available for inspection.
+    """
+    debug_dir = os.path.join(app.root_path, 'debug')
+    
+    # Create the directory if it doesn't exist
+    if not os.path.exists(debug_dir):
+        os.makedirs(debug_dir, exist_ok=True)
+        return jsonify({"files": []})
+    
+    # Get all files in the debug directory
+    files = []
+    for filename in os.listdir(debug_dir):
+        file_path = os.path.join(debug_dir, filename)
+        if os.path.isfile(file_path):
+            # Get file info
+            file_info = {
+                "name": filename,
+                "size": os.path.getsize(file_path),
+                "modified": datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat(),
+                "url": f"/api/debug/{filename}"
+            }
+            files.append(file_info)
+    
+    # Sort by modification time (newest first)
+    files.sort(key=lambda x: x["modified"], reverse=True)
+    
+    return jsonify({"files": files})
+
+
 @app.route('/api/proxy/status', methods=['GET'])
 def api_proxy_status():
     """API endpoint to check the status of the proxy system."""
