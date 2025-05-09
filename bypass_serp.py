@@ -20,6 +20,17 @@ from datetime import datetime
 import aiohttp
 from urllib.parse import urlparse, urljoin
 
+# Import our new modules
+try:
+    from database import init_db, get_session, close_session, save_search_query, save_search_results, save_page_analysis
+    from proxy_manager import proxy_manager
+    from ai_recommendations import generate_seo_recommendations, prioritize_recommendations
+    from competitor_analysis import CompetitorAnalyzer
+    from bulk_analyzer import BulkAnalyzer
+except ImportError:
+    # If modules aren't available yet, log warning but continue
+    logging.warning("New modules not found. Some features will be disabled.")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -46,10 +57,29 @@ class BypassSerpAnalyzer:
         self.captcha_detected = False
         self.block_count = 0
         self.max_retries = 3
+        self.current_query_id = None  # Track current query ID for database integration
         
         # Create necessary directories
         os.makedirs("results", exist_ok=True)
         os.makedirs("debug", exist_ok=True)
+        
+        # Initialize new components if available
+        try:
+            # Initialize database
+            init_db()
+            
+            # Initialize competitor analyzer
+            self.competitor_analyzer = CompetitorAnalyzer(self)
+            
+            # Initialize bulk analyzer
+            self.bulk_analyzer = BulkAnalyzer(self)
+            
+            logger.info("Enhanced features initialized successfully")
+        except NameError:
+            logger.warning("Enhanced features not available")
+        except Exception as e:
+            logger.error(f"Error initializing enhanced features: {str(e)}")
+            traceback.print_exc()
     
     def _initialize_stealth_config(self):
         """Initialize stealth configuration parameters."""
@@ -163,10 +193,60 @@ class BypassSerpAnalyzer:
             traceback.print_exc()
             return []
 
-    async def analyze_page(self, url, session):
+    def _extract_schema_markup(self, soup):
+        """Extract schema markup from HTML."""
+        schema_types = []
+        has_schema = False
+        
+        # Look for JSON-LD schema
+        json_ld_scripts = soup.find_all('script', type='application/ld+json')
+        for script in json_ld_scripts:
+            try:
+                data = json.loads(script.string)
+                if '@type' in data:
+                    schema_types.append(data['@type'])
+                    has_schema = True
+                elif '@graph' in data:
+                    for item in data['@graph']:
+                        if '@type' in item:
+                            schema_types.append(item['@type'])
+                            has_schema = True
+            except:
+                pass
+        
+        # Look for microdata schema
+        microdata_elements = soup.find_all(attrs={"itemtype": True})
+        for element in microdata_elements:
+            itemtype = element.get('itemtype', '')
+            if itemtype:
+                schema_types.append(itemtype.split('/')[-1])
+                has_schema = True
+        
+        # Look for RDFa schema
+        rdfa_elements = soup.find_all(attrs={"typeof": True})
+        for element in rdfa_elements:
+            typeof = element.get('typeof', '')
+            if typeof:
+                schema_types.append(typeof)
+                has_schema = True
+        
+        return {
+            "has_schema": has_schema,
+            "schema_types": schema_types
+        }
+    
+    async def analyze_page(self, url, session, save_to_db=True):
         """
         Analyze a single page for SEO data.
         Uses aiohttp for asynchronous requests with retry mechanism.
+        
+        Args:
+            url (str): The URL to analyze
+            session: aiohttp.ClientSession or None (will create one if None)
+            save_to_db (bool): Whether to save results to database
+            
+        Returns:
+            dict: A dictionary containing the page analysis data
         """
         headers = {
             "User-Agent": self._get_random_user_agent(),
@@ -182,117 +262,213 @@ class BypassSerpAnalyzer:
         max_retries = 3
         base_timeout = 70  # Base timeout in seconds
         
-        for attempt in range(max_retries):
-            try:
-                # Calculate timeout with exponential backoff
-                current_timeout = base_timeout * (1.5 ** attempt)
+        # Create a session if one wasn't provided
+        session_created = False
+        _session = session
+        
+        if session is None:
+            _session = aiohttp.ClientSession()
+            session_created = True
+        
+        # Use a finally block to ensure session is closed if we created it
+        try:
+            for attempt in range(max_retries):
+                try:
+                    # Calculate timeout with exponential backoff
+                    current_timeout = base_timeout * (1.5 ** attempt)
                 
-                if attempt > 0:
-                    logger.info(f"Retry attempt {attempt+1}/{max_retries} for {url} with timeout {current_timeout:.1f}s")
-                else:
-                    logger.info(f"Analyzing page: {url} with timeout {current_timeout:.1f}s")
+                    if attempt > 0:
+                        logger.info(f"Retry attempt {attempt+1}/{max_retries} for {url} with timeout {current_timeout:.1f}s")
+                    else:
+                        logger.info(f"Analyzing page: {url} with timeout {current_timeout:.1f}s")
+                    
+                    self._respect_rate_limits() # Ensure we don't hit sites too fast either
                 
-                self._respect_rate_limits() # Ensure we don't hit sites too fast either
+                    # Get a proxy from the proxy manager if available
+                    proxy_url = None
+                    try:
+                        proxy = proxy_manager.get_proxy()
+                        if proxy:
+                            proxy_url = proxy.get('url')
+                    except NameError:
+                        # proxy_manager not available
+                        pass
+                    except Exception as e:
+                        logger.error(f"Error getting proxy: {str(e)}")
+                    
+                    # Start timing for proxy response time calculation
+                    start_time = time.time()
                 
-                async with session.get(url, headers=headers, timeout=current_timeout) as response:
-                    if response.status != 200:
-                        logger.warning(f"Failed to fetch {url}, status: {response.status}")
-                        # Don't retry for non-timeout errors like 404, 403, etc.
-                        if response.status < 500:
-                            return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
-                        # For server errors (5xx), continue to retry loop
-                        continue
+                    async with _session.get(url, headers=headers, timeout=current_timeout, proxy=proxy_url) as response:
+                        # Calculate response time
+                        response_time_ms = (time.time() - start_time) * 1000
+                        
+                        # Report proxy success/failure if used
+                        if proxy_url:
+                            try:
+                                if response.status == 200:
+                                    proxy_manager.report_success(proxy_url, response_time_ms)
+                                else:
+                                    proxy_manager.report_failure(proxy_url)
+                            except NameError:
+                                pass  # proxy_manager not available
+                            except Exception as e:
+                                logger.error(f"Error reporting proxy status: {str(e)}")
+                        
+                        if response.status != 200:
+                            logger.warning(f"Failed to fetch {url}, status: {response.status}")
+                            # Don't retry for non-timeout errors like 404, 403, etc.
+                            if response.status < 500:
+                                return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
+                            # For server errors (5xx), continue to retry loop
+                            continue
                     
-                    # If we got a successful response, process it
-                    html_content = await response.text()
-                    soup = BeautifulSoup(html_content, "html.parser")
+                        # If we got a successful response, process it
+                        html_content = await response.text()
+                        soup = BeautifulSoup(html_content, "html.parser")
                     
-                    title = soup.title.string.strip() if soup.title else ""
-                    description_tag = soup.find("meta", attrs={"name": "description"})
-                    description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
-                    
-                    meta_keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
-                    keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else ""
+                        title = soup.title.string.strip() if soup.title else ""
+                        description_tag = soup.find("meta", attrs={"name": "description"})
+                        description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
+                        
+                        meta_keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
+                        keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else ""
 
-                    h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
-                    h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
-                    h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
+                        h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
+                        h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
+                        h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
 
-                    links_data = []
-                    page_domain = urlparse(url).netloc
-                    for link in soup.find_all('a', href=True):
-                        href = link['href']
-                        text = link.get_text(strip=True)
-                        is_internal = False
-                        try:
-                            link_domain = urlparse(href).netloc
-                            if not link_domain or link_domain == page_domain:
-                                is_internal = True
-                            # Ensure full URL for relative links
-                            if href.startswith('/'):
-                               href = urljoin(url, href)
-                            elif not href.startswith(('http://', 'https://')):
-                               href = urljoin(url + ('/' if not url.endswith('/') else ''), href)
-                        except Exception:
-                            # If URL parsing fails, assume external or problematic
-                            pass 
-                            
-                        links_data.append({
-                            'text': text,
-                            'url': href,
-                            'is_internal': is_internal
-                        })
-                    
-                    internal_links_count = sum(1 for link in links_data if link['is_internal'])
-                    external_links_count = len(links_data) - internal_links_count
+                        links_data = []
+                        page_domain = urlparse(url).netloc
+                        for link in soup.find_all('a', href=True):
+                            href = link['href']
+                            text = link.get_text(strip=True)
+                            is_internal = False
+                            try:
+                                link_domain = urlparse(href).netloc
+                                if not link_domain or link_domain == page_domain:
+                                    is_internal = True
+                                # Ensure full URL for relative links
+                                if href.startswith('/'):
+                                   href = urljoin(url, href)
+                                elif not href.startswith(('http://', 'https://')):
+                                   href = urljoin(url + ('/' if not url.endswith('/') else ''), href)
+                            except Exception:
+                                # If URL parsing fails, assume external or problematic
+                                pass 
+                                
+                            links_data.append({
+                                'text': text,
+                                'url': href,
+                                'is_internal': is_internal
+                            })
+                        
+                        internal_links_count = sum(1 for link in links_data if link['is_internal'])
+                        external_links_count = len(links_data) - internal_links_count
 
-                    images_data = []
-                    for img in soup.find_all('img'):
-                        src = img.get('src', '')
-                        alt = img.get('alt', '')
-                        # Ensure full URL for relative image src
-                        if src:
-                            if src.startswith('/'):
-                                src = urljoin(url, src)
-                            elif not src.startswith(('http://', 'https://')):
-                                src = urljoin(url + ('/' if not url.endswith('/') else ''), src)
-                        images_data.append({'src': src, 'alt': alt})
-                    
-                    images_with_alt_count = sum(1 for img in images_data if img['alt'])
+                        images_data = []
+                        for img in soup.find_all('img'):
+                            src = img.get('src', '')
+                            alt = img.get('alt', '')
+                            # Ensure full URL for relative image src
+                            if src:
+                                if src.startswith('/'):
+                                    src = urljoin(url, src)
+                                elif not src.startswith(('http://', 'https://')):
+                                    src = urljoin(url + ('/' if not url.endswith('/') else ''), src)
+                            images_data.append({'src': src, 'alt': alt})
+                        
+                        images_with_alt_count = sum(1 for img in images_data if img['alt'])
 
-                    body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
-                    word_count = len(body_text.split()) if body_text else 0
-                    content_sample = " ".join(body_text.split()[:150]) # First 150 words
+                        body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
+                        word_count = len(body_text.split()) if body_text else 0
+                        content_sample = " ".join(body_text.split()[:150]) # First 150 words
+                        
+                        # Extract schema markup
+                        schema_markup = self._extract_schema_markup(soup)
+                        
+                        # Calculate page size and technical metrics
+                        page_size_kb = len(html_content) / 1024
 
-                    logger.info(f"Successfully analyzed: {url}, Title: {title[:50]}...")
-                    return {
-                        "url": url,
-                        "title": title,
-                        "description": description,
-                        "keywords": keywords,
-                        "headings": {
-                            "h1": h1_tags,
-                            "h2": h2_tags,
-                            "h3": h3_tags
-                        },
-                        "links": {
-                            "total": len(links_data),
-                            "internal": internal_links_count,
-                            "external": external_links_count,
-                            "sample": links_data[:10] 
-                        },
-                        "images": {
-                            "total": len(images_data),
-                            "with_alt": images_with_alt_count,
-                            "without_alt": len(images_data) - images_with_alt_count,
-                            "sample": images_data[:5]
-                        },
-                        "content": {
-                            "word_count": word_count,
-                            "sample": content_sample
-                        },
-                        "error": None # Explicitly set error to None on success
-                    }
+                        # Create technical data section
+                        technical_data = {
+                            "page_size_kb": page_size_kb,
+                            "load_time_ms": response_time_ms,
+                            "status_code": response.status,
+                            "content_type": response.headers.get('Content-Type', '')
+                        }
+                        
+                        # Assemble the complete analysis data
+                        analysis_data = {
+                            "url": url,
+                            "title": title,
+                            "description": description,
+                            "keywords": keywords,
+                            "headings": {
+                                "h1": h1_tags,
+                                "h2": h2_tags,
+                                "h3": h3_tags
+                            },
+                            "links": {
+                                "total": len(links_data),
+                                "internal": internal_links_count,
+                                "external": external_links_count,
+                                "sample": links_data[:10] 
+                            },
+                            "images": {
+                                "total": len(images_data),
+                                "with_alt": images_with_alt_count,
+                                "without_alt": len(images_data) - images_with_alt_count,
+                                "sample": images_data[:5]
+                            },
+                            "content": {
+                                "word_count": word_count,
+                                "sample": content_sample
+                            },
+                            "schema_markup": schema_markup,
+                            "technical": technical_data,
+                            "error": None # Explicitly set error to None on success
+                        }
+                        
+                        logger.info(f"Successfully analyzed: {url}, Title: {title[:50]}...")
+                        
+                        # Save to database if requested
+                        if save_to_db:
+                            try:
+                                # Find the search result ID if available
+                                search_result_id = None
+                                if hasattr(self, 'current_query_id') and self.current_query_id:
+                                    try:
+                                        from database import get_session, close_session, SearchResult, save_page_analysis
+                                        session = get_session()
+                                        try:
+                                            search_result = session.query(SearchResult).filter(
+                                                SearchResult.query_id == self.current_query_id,
+                                                SearchResult.url.like(f"%{urlparse(url).netloc}%")
+                                            ).first()
+                                            
+                                            if search_result:
+                                                search_result_id = search_result.id
+                                        finally:
+                                            close_session(session)
+                                    except (ImportError, NameError):
+                                        logger.warning("Database modules not available for saving page analysis")
+                                    except Exception as e:
+                                        logger.error(f"Error finding search result ID: {str(e)}")
+                                
+                                if search_result_id:
+                                    try:
+                                        from database import save_page_analysis
+                                        save_page_analysis(search_result_id, analysis_data)
+                                        logger.info(f"Saved page analysis to database for URL: {url}")
+                                    except (ImportError, NameError):
+                                        logger.warning("Database modules not available for saving page analysis")
+                                    except Exception as e:
+                                        logger.error(f"Error saving page analysis: {str(e)}")
+                            except Exception as e:
+                                logger.error(f"Error in database operations: {str(e)}")
+                        
+                        return analysis_data
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout on attempt {attempt+1}/{max_retries} for {url}")
                 if attempt == max_retries - 1:  # If this was the last attempt
