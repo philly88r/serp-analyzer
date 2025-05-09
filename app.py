@@ -751,6 +751,57 @@ def api_generate_blog(query):
         return jsonify({'error': f'Blog generation failed: {str(e)}'}), 500
 
 
+@app.route('/api/simple-search', methods=['POST'])
+def simple_search():
+    """Simplified API endpoint for testing search functionality."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        query = data.get('query', '')
+        num_results = int(data.get('num_results', 10))
+        
+        if not query:
+            return jsonify({"error": "Query parameter is required"}), 400
+        
+        # Log the request
+        print(f"Simple Search API called with query: '{query}', num_results: {num_results}")
+        
+        # Generate mock results instead of actually searching
+        mock_results = [
+            {
+                "url": f"https://example.com/result-{i+1}",
+                "title": f"Example Result {i+1} for '{query}'",
+                "description": f"This is a mock search result for the query '{query}'. Result number {i+1}."
+            } for i in range(min(num_results, 5))  # Limit to 5 results max
+        ]
+        
+        # Create response data
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename_query = re.sub(r'\W+', '_', query)
+        json_filename = f"{filename_query}_{timestamp}.json"
+        
+        output_data = {
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "results": mock_results,
+            "files": {
+                "json": json_filename,
+                "csv": f"{filename_query}_{timestamp}.csv"
+            }
+        }
+        
+        # Don't actually save to file to keep it simple
+        
+        return jsonify(output_data)
+    
+    except Exception as e:
+        import traceback
+        print(f"Error in simple search API: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/search', methods=['POST'])
 async def api_search():
     """API endpoint for the frontend to search and analyze SERP results."""

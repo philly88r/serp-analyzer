@@ -86,6 +86,7 @@ def create_templates():
         </div>
         
         <script src="{{ url_for('static', filename='script.js') }}"></script>
+        <script src="{{ url_for('static', filename='test-script.js') }}"></script>
     </body>
     </html>
     """
