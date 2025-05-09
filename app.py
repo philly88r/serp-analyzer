@@ -740,6 +740,123 @@ def api_generate_blog(query):
         return jsonify({'error': f'Blog generation failed: {str(e)}'}), 500
 
 
+@app.route('/api/search', methods=['POST'])
+async def api_search():
+    """API endpoint for the frontend to search and analyze SERP results."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        query = data.get('query', '')
+        num_results = int(data.get('num_results', 10))
+        
+        if not query:
+            return jsonify({"error": "Query parameter is required"}), 400
+        
+        # Log the request
+        print(f"API Search called with query: '{query}', num_results: {num_results}")
+        
+        # Initialize the analyzer
+        analyzer = BypassSerpAnalyzer()
+        
+        # Call the analyze_serp method to get results
+        # This will need to be adapted based on what methods are available in your SerpAnalyzer
+        search_results = await analyzer.search_google(query, num_results)
+        
+        if not search_results:
+            return jsonify({
+                "query": query,
+                "timestamp": datetime.now().isoformat(),
+                "results": [],
+                "error": "No search results found"
+            })
+        
+        # Process results
+        analyzed_pages = []
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for result in search_results:
+                if result.get('url'):
+                    # Create a simple analyze_page function if it doesn't exist
+                    tasks.append(analyze_page(result['url'], session))
+            
+            # Gather results
+            page_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for i, page_data in enumerate(page_results):
+                if isinstance(page_data, Exception):
+                    # Handle exceptions
+                    analyzed_pages.append({
+                        "url": search_results[i].get('url', ''),
+                        "title": search_results[i].get('title', 'Error'),
+                        "description": f"Error analyzing page: {str(page_data)}"
+                    })
+                else:
+                    # Merge data
+                    analyzed_pages.append({
+                        **search_results[i],
+                        **(page_data or {})
+                    })
+        
+        # Save results
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename_query = re.sub(r'\W+', '_', query)
+        json_filename = f"{filename_query}_{timestamp}.json"
+        
+        output_data = {
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "results": analyzed_pages,
+            "files": {
+                "json": json_filename,
+                "csv": f"{filename_query}_{timestamp}.csv"
+            }
+        }
+        
+        # Save to file
+        json_path = os.path.join(app.config['RESULTS_FOLDER'], json_filename)
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=4)
+        
+        return jsonify(output_data)
+    
+    except Exception as e:
+        import traceback
+        print(f"Error in API search: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+async def analyze_page(url, session):
+    """Analyze a single page for basic data."""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        
+        async with session.get(url, headers=headers, timeout=15) as response:
+            if response.status != 200:
+                return {"error": f"HTTP {response.status}"}
+            
+            html = await response.text()
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            title = soup.title.string.strip() if soup.title else ""
+            
+            # Get meta description
+            meta_desc = soup.find('meta', attrs={'name': 'description'})
+            description = meta_desc['content'] if meta_desc and meta_desc.get('content') else ""
+            
+            return {
+                "title": title,
+                "description": description
+            }
+    except Exception as e:
+        print(f"Error analyzing {url}: {str(e)}")
+        return {"error": str(e)}
+
+
 # ===========================
 # Main Execution
 # ===========================
