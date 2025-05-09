@@ -13,4 +13,3 @@ asyncio==3.4.3
 crawl4ai>=0.4.247 # Already compatible
 playwright>=1.49.0
 httpx>=0.23.0
-stealth_serp_analyzer
