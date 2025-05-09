@@ -131,7 +131,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </div>
                         <div class="info-item">
                             <h3><i class="fas fa-list-ol"></i> Results</h3>
-                            <p>${data.results.length} pages analyzed</p>
+                            <p>${data.results && data.results.length ? data.results.length : 0} pages analyzed</p>
                         </div>
                         <div class="info-item">
                             <h3><i class="fas fa-chart-bar"></i> Status</h3>
@@ -149,16 +149,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 
                 // Generate comparative table
-                generateComparativeTable(data.results);
-                
-                // Generate charts
-                generateCharts(data.results);
-                
-                // Update detailed results list
-                updateDetailedResults(data.results);
-                
-                // Generate SEO recommendations
-                generateSeoRecommendations(data.results);
+                if (data.results && Array.isArray(data.results)) {
+                    generateComparativeTable(data.results);
+                    
+                    // Generate charts
+                    generateCharts(data.results);
+                    
+                    // Update detailed results list
+                    updateDetailedResults(data.results);
+                    
+                    // Generate SEO recommendations
+                    generateSeoRecommendations(data.results);
+                } else {
+                    console.warn('No results data available or results is not an array');
+                    // Display a message to the user
+                    document.getElementById('comparative-table').innerHTML = '<div class="alert alert-warning">No results data available. Please try again with a different query.</div>';
+                    document.getElementById('charts-container').innerHTML = '<div class="alert alert-warning">No chart data available.</div>';
+                    document.getElementById('detailed-results').innerHTML = '<div class="alert alert-warning">No detailed results available.</div>';
+                    document.getElementById('seo-recommendations').innerHTML = '<div class="alert alert-warning">Cannot generate SEO recommendations without results data.</div>';
+                }
             }, 1000);
         })
         .catch(error => {
