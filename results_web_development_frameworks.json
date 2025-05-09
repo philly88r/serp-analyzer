@@ -1,0 +1,44 @@
+[
+  {
+    "title": "Please help me choose a framework to build a website im ...",
+    "url": "https://www.reddit.com/r/webdev/comments/17izsme/please_help_me_choose_a_framework_to_build_a/",
+    "description": "Try React, try Vue, try Astro, try Next.js, try Svelte... Just try them. You'll learn what you like and do not like in a framework and you'll build experience ...",
+    "position": 1,
+    "query": "web development frameworks"
+  },
+  {
+    "title": "A Guide to Web Development Frameworks",
+    "url": "https://builtin.com/articles/web-development-frameworks",
+    "description": "Jan 30, 2024 — A web development framework is a collection of tools, libraries and best practices that make it easier to create, maintain and scale websites.",
+    "position": 2,
+    "query": "web development frameworks"
+  },
+  {
+    "title": "32 Best Web Development Frameworks For 2025",
+    "url": "https://www.lambdatest.com/blog/best-web-development-frameworks/",
+    "description": "Mar 24, 2025 — 16 Best Web Frameworks for Front-End Development · React · Angular · Vue.js · Svelte · Preact · Ember.js · Alpine.js · ASP.NET Core. ASPNET Core.",
+    "position": 3,
+    "query": "web development frameworks"
+  },
+  {
+    "title": "What is a web development framework (WDF)? - TechTarget",
+    "url": "https://www.techtarget.com/searchcontentmanagement/definition/web-development-framework-WDF#:~:text=A%20web%20development%20framework%20is,application%20programming%20interfaces%20(APIs).",
+    "description": "",
+    "position": 4,
+    "query": "web development frameworks"
+  },
+  {
+    "title": "Web Frameworks: All You Should Know About - BrowserStack",
+    "url": "https://www.browserstack.com/guide/web-development-frameworks",
+    "description": "",
+    "position": 5,
+    "query": "web development frameworks"
+  },
+  {
+    "title": "What Is Web Development? (Definition, Types, Career) | Built In",
+    "url": "https://builtin.com/software-engineering-perspectives/web-development",
+    "description": "",
+    "position": 6,
+    "query": "web development frameworks"
+  }
+]

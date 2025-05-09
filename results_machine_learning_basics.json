@@ -1,0 +1,44 @@
+[
+  {
+    "title": "Machine Learning Tutorial",
+    "url": "https://www.geeksforgeeks.org/machine-learning/",
+    "description": "6 days ago — Machine learning is a branch of Artificial Intelligence that focuses on developing models and algorithms that let computers learn from data ...",
+    "position": 1,
+    "query": "machine learning basics"
+  },
+  {
+    "title": "Machine Learning Basics",
+    "url": "https://builtin.com/machine-learning/machine-learning-basics",
+    "description": "Machine learning is an application of artificial intelligence where a machine learns from past experiences (input data) and makes future predictions.",
+    "position": 2,
+    "query": "machine learning basics"
+  },
+  {
+    "title": "Machine learning - Wikipedia",
+    "url": "https://en.wikipedia.org/wiki/Machine_learning",
+    "description": "",
+    "position": 3,
+    "query": "machine learning basics"
+  },
+  {
+    "title": "Prerequisites and prework | Machine Learning - Google for Developers",
+    "url": "https://developers.google.com/machine-learning/crash-course/prereqs-and-prework",
+    "description": "",
+    "position": 4,
+    "query": "machine learning basics"
+  },
+  {
+    "title": "What is Machine Learning? Definition, Types, Tools & More",
+    "url": "https://www.datacamp.com/blog/what-is-machine-learning",
+    "description": "",
+    "position": 5,
+    "query": "machine learning basics"
+  },
+  {
+    "title": "The Ultimate Beginner Guide to Machine Learning",
+    "url": "https://www.reddit.com/r/learnmachinelearning/comments/1fxqko8/the_ultimate_beginner_guide_to_machine_learning/",
+    "description": "I spent 13 hours making this guide for every beginner to intermediate student learning machine learning and deep learning here is the link.",
+    "position": 6,
+    "query": "machine learning basics"
+  }
+]

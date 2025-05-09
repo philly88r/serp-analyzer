@@ -1,0 +1,44 @@
+[
+  {
+    "title": "The Python Tutorial",
+    "url": "https://docs.python.org/3/tutorial/index.html",
+    "description": "This tutorial introduces the reader informally to the basic concepts and features of the Python language and system. It helps to have a Python interpreter handy ...",
+    "position": 1,
+    "query": "python tutorial"
+  },
+  {
+    "title": "Python Tutorial",
+    "url": "https://www.w3schools.com/python/",
+    "description": "Learn Python. Python is a popular programming language. Python can be used on a server to create web applications. Start learning Python now.",
+    "position": 2,
+    "query": "python tutorial"
+  },
+  {
+    "title": "Python Tutorial",
+    "url": "https://www.tutorialspoint.com/python/index.htm",
+    "description": "This Python tutorial gives a complete understanding of Python programming language, starting from basic concepts to advanced concepts.",
+    "position": 3,
+    "query": "python tutorial"
+  },
+  {
+    "title": "Python Tutorial | Learn Python Programming Language",
+    "url": "https://www.geeksforgeeks.org/python-programming-language-tutorial/",
+    "description": "6 days ago — In this section, we'll cover the basics of Python programming, including installing Python, writing first program, understanding comments and working with ...",
+    "position": 4,
+    "query": "python tutorial"
+  },
+  {
+    "title": "List of Python Keywords (With Examples) - ScholarHat",
+    "url": "https://www.scholarhat.com/tutorial/python/keywords-in-python#:~:text=Keywords%20in%20Python%20include%3A%20False,%2C%20while%2C%20with%20and%20yield.",
+    "description": "ScholarHathttps://www.scholarhat.com › tutorial › keywords-in-pyt...",
+    "position": 5,
+    "query": "python tutorial"
+  },
+  {
+    "title": "Where can I find the best tutorials for Python? - Quora",
+    "url": "https://www.quora.com/Where-can-I-find-the-best-tutorials-for-Python",
+    "description": "Quorahttps://www.quora.com › Where-can-I-find-the-best-tuto...",
+    "position": 6,
+    "query": "python tutorial"
+  }
+]

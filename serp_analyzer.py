@@ -86,6 +86,9 @@ class SerpAnalyzer:
             'block_count': 0,  # Count of recent blocks, used by _rotate_proxy_if_needed
             'last_block_time': 0  # Time of the last block, initialize to 0
         }
+        
+        # Initialize more advanced proxy state tracking
+        self._initialize_proxy_state()
     
     async def search_google(self, query, num_results=6):
         """
@@ -1181,67 +1184,635 @@ class SerpAnalyzer:
         print(f"DEBUG: All circuits reset. Using default state: {default_state}")
         return default_state
 
+    def __init__(self, headless=True):
+        """
+        Initialize the SERP analyzer.
+        """
+        self.headless = headless
+        self._initialize_proxy_state()
+        self._initialize_user_agents()
+        self._proxy_state = {
+            "last_rotation_time": 0,
+            "rotation_interval": 180,  # 3 minutes default
+            "block_count": 0,
+            "last_block_time": 0,
+            "global_backoff": 1.0
+        }
+        self.last_request_time = 0
+        self.min_request_interval = 5  # Minimum seconds between requests
+        self.captcha_detected = False
+        self.session = requests.Session()  # Use a persistent session
+
+    def _search_with_direct_http(self, query, num_results=6):
+        """
+        Search Google using direct HTTP requests.
+        """
+        try:
+            # Construct the search URL
+            search_url = f"https://www.google.com/search?q={query}&num={num_results}"
+            
+            # Send the request
+            response = self.session.get(search_url, headers=self._get_random_user_agent())
+            
+            # Check for CAPTCHA or block page
+            if "captcha" in response.text.lower() or "unusual traffic" in response.text.lower():
+                print(f"CAPTCHA or block detected in HTML content")
+                return []
+            
+            # Parse the HTML
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Direct extraction of search results
+            search_results = []
+            
+            # Get all links that could be search results
+            links = soup.find_all('a')
+            print(f"Found {len(links)} links in total")
+            
+            # Filter links that look like search results
+            for link in links:
+                href = link.get('href', '')
+                # Skip Google's own links and other non-result URLs
+                if not href.startswith('http') or 'google' in href.lower():
+                    continue
+                    
+                # Extract the title and URL
+                title = link.text.strip()
+                url = href
+                
+                # Add to the search results
+                search_results.append({
+                    'title': title,
+                    'url': url
+                })
+            
+            return search_results
+        
+        except Exception as e:
+            print(f"Error searching with direct HTTP: {str(e)}")
+            return []
+
+    def _initialize_proxy_state(self):
+        """
+        Initialize the proxy state tracking dictionary with diverse US states
+        """
+        self.proxy_states = {
+            "california": {"blocks": 0, "last_used": None},
+            "new_york": {"blocks": 0, "last_used": None},
+            "texas": {"blocks": 0, "last_used": None},
+            "florida": {"blocks": 0, "last_used": None},
+            "illinois": {"blocks": 0, "last_used": None},
+            "washington": {"blocks": 0, "last_used": None},
+            "massachusetts": {"blocks": 0, "last_used": None},
+            "virginia": {"blocks": 0, "last_used": None},
+            "colorado": {"blocks": 0, "last_used": None},
+            "georgia": {"blocks": 0, "last_used": None},
+            "oregon": {"blocks": 0, "last_used": None},
+            "arizona": {"blocks": 0, "last_used": None},
+            "pennsylvania": {"blocks": 0, "last_used": None},
+            "michigan": {"blocks": 0, "last_used": None},
+            "ohio": {"blocks": 0, "last_used": None},
+            'us-wa': {'uses': 0, 'last_used': None, 'blocks': 0},
+            'us-az': {'uses': 0, 'last_used': None, 'blocks': 0},
+            'us-ma': {'uses': 0, 'last_used': None, 'blocks': 0},
+        }
+        # Start with a random state instead of always California
+        import random
+        self.current_proxy_state = random.choice(list(self.proxy_states.keys()))
+        self.last_rotation_time = time.time()
+        # Reduced rotation interval to 1-2 minutes (60-120 seconds) instead of 5 minutes
+        self.rotation_interval = random.randint(60, 120)  
+        # Track session persistence
+        import uuid
+        self.session_id = str(uuid.uuid4())
+        # Backoff mechanism settings
+        self.consecutive_blocks = 0
+        self.base_rotation_interval = 60  # Base interval of 1 minute
+        
+    def _rotate_proxy_if_needed(self, force_rotation=False):
+        """
+        Determine if proxy rotation is needed and select the next proxy state
+        
+        Args:
+            force_rotation (bool): Force rotation regardless of timing
+            
+        Returns:
+            bool: True if rotation occurred, False otherwise
+        """
+        current_time = time.time()
+        time_since_last_rotation = current_time - self.last_rotation_time
+        
+        # Determine if we need to rotate
+        needs_rotation = False
+        
+        # Force rotation if requested (e.g., after detecting a block)
+        if force_rotation:
+            print("Forcing proxy rotation due to explicit request (likely after a block)")
+            needs_rotation = True
+        # Normal time-based rotation
+        elif time_since_last_rotation > self.rotation_interval:
+            print(f"Regular proxy rotation after {time_since_last_rotation:.1f} seconds (interval: {self.rotation_interval}s)")
+            needs_rotation = True
+        
+        if needs_rotation:
+            # Get list of states sorted by block count (prefer states with fewer blocks)
+            states = list(self.proxy_states.keys())
+            states.sort(key=lambda s: self.proxy_states[s]['blocks'])
+            
+            # Exclude the current state to ensure we rotate
+            if self.current_proxy_state in states:
+                states.remove(self.current_proxy_state)
+            
+            if not states:  # If somehow we have no states left
+                states = list(self.proxy_states.keys())
+            
+            # Choose from the top 5 states with lowest block counts
+            import random
+            selection_pool = states[:min(5, len(states))]
+            next_state = random.choice(selection_pool)
+            
+            # Update the state tracking
+            self.current_proxy_state = next_state
+            self.last_rotation_time = current_time
+            self.proxy_states[next_state]['uses'] += 1
+            self.proxy_states[next_state]['last_used'] = current_time
+            
+            # Adjust rotation interval based on consecutive blocks
+            if self.consecutive_blocks > 0:
+                # Decrease interval when we're seeing blocks (more frequent rotation)
+                self.rotation_interval = max(30, self.base_rotation_interval - (self.consecutive_blocks * 10))
+                print(f"Adjusted rotation interval to {self.rotation_interval}s due to {self.consecutive_blocks} consecutive blocks")
+            else:
+                # Gradually return to normal interval
+                self.rotation_interval = random.randint(60, 120)
+            
+            print(f"Rotated proxy to {next_state} (used {self.proxy_states[next_state]['uses']} times, blocks: {self.proxy_states[next_state]['blocks']})")
+            return True
+        
+        return False
+    
+    def _get_proxy_config(self, state=None):
+        """
+        Generate proxy configuration for a given state
+        
+        Args:
+            state (str): The state to use, or None to use current state
+            
+        Returns:
+            dict: Proxy configuration dictionary
+        """
+        if state is None:
+            state = self.current_proxy_state
+        
+        # Create username with US state and session parameters
+        # Format: customer-USERNAME-st-STATE-sessid-SESSION_ID-sesstime-3
+        # This targets specific US state proxies and maintains the same IP for 3 minutes
+        enhanced_username = f"{OXYLABS_USERNAME}-st-{state.replace('-', '_')}-sessid-{self.session_id}-sesstime-3"
+        
+        # Set up the proxy with enhanced authentication
+        proxy_url = "pr.oxylabs.io:7777"
+        proxies = {
+            "http": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}",
+            "https": f"http://{enhanced_username}:{OXYLABS_PASSWORD}@{proxy_url}"
+        }
+        
+        return {
+            'proxies': proxies,
+            'state': state,
+            'username': enhanced_username,
+            'session_id': self.session_id
+        }
+    
     async def _direct_search_google(self, query, search_url, num_results=6):
         """
-        Search Google directly without proxies
+        Search Google directly using AsyncWebCrawler
         """
-        # Initialize result to handle cases where crawler setup might fail
-        result = None 
         try:
-            print(f"Using direct search method for query: {query}")
+            print(f"Using direct search method with AsyncWebCrawler for query: {query}")
             
-            # Use AsyncWebCrawler without a proxy
+            import asyncio
+            from crawl4ai import AsyncWebCrawler
+            from bs4 import BeautifulSoup
+            import re
+            
             try:
-                print(f"Starting direct crawl4ai with timeout...")
-                import asyncio
+                print(f"Starting AsyncWebCrawler...")
                 async with AsyncWebCrawler() as crawler:
-                    # Create a task for the crawler operation with a timeout
                     try:
                         result = await asyncio.wait_for(
                             crawler.arun(
                                 search_url,
                                 headless=self.headless,
-                                user_agent=self._get_random_user_agent(), # Ensure this calls the class method
+                                user_agent=self._get_random_user_agent(),
                                 cache_mode="bypass",
                                 wait_until="networkidle",
-                                page_timeout=15000,  # Reduced timeout to 15 seconds
-                                delay_before_return_html=0.5,
+                                page_timeout=15000,  # 15 seconds timeout
+                                delay_before_return_html=1.0,
                                 word_count_threshold=100,
                                 scan_full_page=True,
-                                scroll_delay=0.3,
+                                scroll_delay=0.5,
                                 remove_overlay_elements=True
                             ),
                             timeout=20.0  # 20 second timeout for the entire operation
                         )
-                        print(f"Direct crawl4ai completed successfully")
+                        print(f"AsyncWebCrawler completed successfully")
                     except asyncio.TimeoutError:
-                        print(f"Direct crawl4ai operation timed out after 20 seconds")
+                        print(f"AsyncWebCrawler operation timed out after 20 seconds")
                         return []
-            except Exception as e:
-                print(f"Error setting up or running direct crawl4ai: {str(e)}")
-                return []
                 
-            if result is None: # Check if crawler operation failed to assign result
-                print(f"Direct crawl4ai did not return a result, possibly due to setup error.")
+                if not result.success:
+                    print(f"Error searching with AsyncWebCrawler: {result.error_message}")
+                    return []
+                
+                # Get the HTML content
+                html_content = result.html
+                if not html_content or len(html_content) < 1000:
+                    print(f"AsyncWebCrawler did not return valid HTML content (length: {len(html_content) if html_content else 0})")
+                    return []
+                
+                # Save the HTML for debugging
+                try:
+                    with open("google_search_debug.html", "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    print("Saved HTML to google_search_debug.html for debugging")
+                except Exception as e:
+                    print(f"Could not save HTML for debugging: {str(e)}")
+                
+                # Check for CAPTCHA or block page
+                if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
+                    print(f"CAPTCHA or block detected in HTML content")
+                    return []
+                
+                # Parse the HTML
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+                # Direct extraction of search results
+                search_results = []
+                
+                # Get all links that could be search results
+                links = soup.find_all('a')
+                print(f"Found {len(links)} links in total")
+                
+                # Filter links that look like search results
+                for link in links:
+                    href = link.get('href', '')
+                    # Skip Google's own links and other non-result URLs
+                    if not href.startswith('http') or 'google' in href.lower():
+                        continue
+                        
+                    # Get the title from the link text or nearby h3
+                    title = link.get_text().strip()
+                    if not title and link.find('h3'):
+                        title = link.find('h3').get_text().strip()
+                    
+                    # Skip if no title
+                    if not title:
+                        continue
+                    
+                    # Try to find a description
+                    description = ""
+                    parent = link.parent
+                    for _ in range(3):  # Look up to 3 levels up
+                        if parent:
+                            # Find any div that might contain a description
+                            desc_div = parent.find('div', class_=lambda c: c and ('desc' in c.lower() or 'snippet' in c.lower()))
+                            if desc_div:
+                                description = desc_div.get_text().strip()
+                                break
+                            parent = parent.parent
+                    
+                    # Add to results
+                    search_results.append({
+                        "title": title,
+                        "url": href,
+                        "description": description,
+                        "position": len(search_results) + 1,
+                        "query": query
+                    })
+                    
+                    # Stop once we have enough results
+                    if len(search_results) >= num_results:
+                        break
+                
+                print(f"Directly extracted {len(search_results)} search results")
+                
+                # If we found results, return them
+                if search_results and len(search_results) > 0:
+                    # Save the results for debugging
+                    try:
+                        import json
+                        with open("direct_extraction_results.json", "w", encoding="utf-8") as f:
+                            json.dump(search_results, f, indent=2, ensure_ascii=False)
+                        print("Saved results to direct_extraction_results.json for debugging")
+                    except Exception as e:
+                        print(f"Could not save results for debugging: {str(e)}")
+                        
+                    return search_results
+                
+                # If direct extraction failed, try the process_google_html method
+                print("Direct extraction failed, trying _process_google_html...")
+                processed_results = await self._process_google_html(html_content, query, num_results)
+                
+                if processed_results and len(processed_results) > 0:
+                    return processed_results
+                
+                # As a last resort, try regex extraction
+                print("All extraction methods failed, trying regex as last resort...")
+                return await self._extract_results_with_regex(html_content, num_results)
+                
+            except Exception as e:
+                print(f"Error using AsyncWebCrawler: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 return []
+        except Exception as e:
+            print(f"Overall error in _direct_search_google: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []
+            
+    async def search_google(self, query, num_results=6):
+        """
+        Search Google for a query and return the results.
+        Uses multiple methods to ensure reliable results extraction.
+        """
+        try:
+            print(f"Searching Google for: {query}")
+            
+            # Reset captcha detection flag
+            self.captcha_detected = False
+            
+            # Try multiple methods with retries
+            for attempt in range(3):  # Try up to 3 times
+                if attempt > 0:
+                    print(f"Retry attempt {attempt+1}/3 for query: {query}")
+                    # Add increasing delay between retries
+                    delay = 5 + (attempt * 5) + random.uniform(1.0, 5.0)
+                    print(f"Waiting {delay:.2f} seconds before retry")
+                    await asyncio.sleep(delay)
+                
+                # Construct the search URL with randomized parameters
+                params = {
+                    "q": query,
+                    "num": num_results * 2,  # Request more results than needed
+                    "hl": "en",
+                    "gl": "us",
+                    "cr": "countryUS",
+                    "pws": "0"  # Disable personalized results
+                }
+                
+                # Add random parameters to avoid detection patterns
+                if random.random() < 0.5:
+                    params["safe"] = "off"
+                
+                if random.random() < 0.7:
+                    params["source"] = "hp"
+                
+                # Randomize the order of parameters
+                param_items = list(params.items())
+                random.shuffle(param_items)
+                shuffled_params = dict(param_items)
+                
+                # Build the query string
+                query_string = "&".join([f"{k}={v}" for k, v in shuffled_params.items()])
+                search_url = f"https://www.google.com/search?{query_string}"
+                
+                # Try direct HTTP request first (most reliable method based on testing)
+                results = await self._search_with_direct_http(query, search_url, num_results)
+                
+                # If direct HTTP request succeeds, return the results
+                if results and len(results) > 0:
+                    print(f"Direct HTTP request returned {len(results)} results")
+                    return results
+                
+                if self.captcha_detected:
+                    print(f"CAPTCHA detected on attempt {attempt+1}. Adding longer delay before retry.")
+                    # Add longer delay if CAPTCHA was detected
+                    await asyncio.sleep(10 + (attempt * 10))
+                
+                # If direct HTTP request fails, try direct search with AsyncWebCrawler
+                print(f"Direct HTTP request failed. Trying with AsyncWebCrawler...")
+                results = await self._direct_search_google(query, search_url, num_results)
+                
+                # If results found, return them
+                if results and len(results) > 0:
+                    print(f"AsyncWebCrawler returned {len(results)} results")
+                    return results
+                
+                # If direct search fails, try with Oxylabs proxy
+                if not results or len(results) == 0:
+                    print(f"Direct search failed or returned no results. Trying with Oxylabs proxy...")
+                    results = await self._search_with_oxylabs_proxy(query, search_url, num_results)
+                
+                # If results found, return them
+                if results and len(results) > 0:
+                    print(f"Oxylabs proxy returned {len(results)} results")
+                    return results
+            
+            # If all attempts failed
+            print(f"All search methods and retries failed for query: {query}")
+            return []
+            
+        except Exception as e:
+            print(f"Error searching Google: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []
+            
+    async def _apply_stealth_techniques(self, browser):
+        """
+        Apply stealth techniques to the Nodriver browser to avoid detection
+        """
+        try:
+            # Execute stealth JavaScript to modify browser fingerprinting
+            stealth_script = """
+            Object.defineProperty(navigator, 'languages', {get: function() { return ['en-US', 'en']; }});
+            Object.defineProperty(navigator, 'webdriver', {get: function() { return false; }});
+            window.chrome = { runtime: {} };
+            """
+            await browser.evaluate(stealth_script)
+            print("Applied stealth JavaScript techniques")
+        except Exception as e:
+            print(f"Warning: Could not apply all stealth techniques: {str(e)}")
+    
+    async def _simulate_human_behavior(self, browser):
+        """
+        Simulate human-like behavior on the page to avoid bot detection
+        """
+        try:
+            import random
+            import asyncio
+            
+            # Random scroll behavior
+            scroll_amount = random.randint(300, 700)
+            await browser.evaluate(f"window.scrollBy(0, {scroll_amount})")
+            await asyncio.sleep(random.uniform(0.5, 1.2))
+            
+            # Random mouse movements (simulated via JavaScript)
+            for _ in range(3):
+                x = random.randint(100, 700)
+                y = random.randint(100, 500)
+                mouse_script = f"document.dispatchEvent(new MouseEvent('mousemove', {{clientX: {x}, clientY: {y}, bubbles: true}}));"
+                await browser.evaluate(mouse_script)
+                await asyncio.sleep(random.uniform(0.1, 0.3))
+                
+            # Another scroll
+            scroll_amount = random.randint(200, 500)
+            await browser.evaluate(f"window.scrollBy(0, {scroll_amount})")
+            await asyncio.sleep(random.uniform(0.7, 1.5))
+            
+            print("Simulated human-like behavior on page")
+        except Exception as e:
+            print(f"Warning: Could not simulate all human behaviors: {str(e)}")
 
-            if not result.success:
-                print(f"Error searching with direct method: {result.error_message}")
+    async def _search_with_oxylabs_proxy(self, query, search_url, num_results=6):
+        """
+        Search Google using AsyncWebCrawler with Oxylabs proxy for enhanced stealth
+        
+        Args:
+            query (str): The search query
+            search_url (str): The Google search URL
+            num_results (int): Number of results to extract
+            
+        Returns:
+            list: List of dictionaries containing search results, or empty list if error
+        """
+        try:
+            print(f"Using Oxylabs proxy with AsyncWebCrawler for query: {query}")
+            
+            # Rotate proxy if needed
+            self._rotate_proxy_if_needed()
+            
+            # Get proxy configuration
+            proxy_config = self._get_proxy_config()
+            print(f"Using proxy state: {proxy_config['state']} with session ID: {proxy_config['session_id']}")
+            
+            # Import required modules
+            import asyncio
+            from crawl4ai import AsyncWebCrawler
+            
+            # Configure proxy for AsyncWebCrawler
+            proxy_auth = f"{proxy_config['username']}:{OXYLABS_PASSWORD}"
+            proxy_url = f"http://{proxy_auth}@pr.oxylabs.io:7777"
+            
+            try:
+                print(f"Starting AsyncWebCrawler with Oxylabs proxy...")
+                # Use AsyncWebCrawler with a timeout
+                async with AsyncWebCrawler() as crawler:
+                    try:
+                        result = await asyncio.wait_for(
+                            crawler.arun(
+                                search_url,
+                                headless=self.headless,
+                                user_agent=self._get_random_user_agent(),
+                                cache_mode="bypass",
+                                wait_until="networkidle",
+                                page_timeout=20000,  # 20 seconds timeout
+                                delay_before_return_html=1.0,
+                                word_count_threshold=100,
+                                scan_full_page=True,
+                                scroll_delay=0.5,
+                                remove_overlay_elements=True,
+                                proxy=proxy_url
+                            ),
+                            timeout=30.0  # 30 second timeout for the entire operation with proxy
+                        )
+                        print(f"AsyncWebCrawler with Oxylabs completed successfully")
+                    except asyncio.TimeoutError:
+                        print(f"AsyncWebCrawler with Oxylabs operation timed out after 30 seconds")
+                        # Mark this state as having a block
+                        self.proxy_states[proxy_config['state']]['blocks'] += 1
+                        self.consecutive_blocks += 1
+                        # Force rotation for next attempt
+                        self._rotate_proxy_if_needed(force_rotation=True)
+                        return []
+                
+                if not result.success:
+                    print(f"Error searching with AsyncWebCrawler + Oxylabs: {result.error_message}")
+                    # Mark this state as having a block
+                    self.proxy_states[proxy_config['state']]['blocks'] += 1
+                    self.consecutive_blocks += 1
+                    # Force rotation for next attempt
+                    self._rotate_proxy_if_needed(force_rotation=True)
+                    return []
+                
+                # Process the HTML
+                html_content = result.html
+                if not html_content or len(html_content) < 1000:
+                    print(f"AsyncWebCrawler with Oxylabs did not return valid HTML content")
+                    # Mark this state as having a block
+                    self.proxy_states[proxy_config['state']]['blocks'] += 1
+                    self.consecutive_blocks += 1
+                    # Force rotation for next attempt
+                    self._rotate_proxy_if_needed(force_rotation=True)
+                    return []
+                
+                # Check for CAPTCHA or block page
+                if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
+                    print(f"CAPTCHA or block detected with Oxylabs proxy")
+                    # Mark this state as having a block
+                    self.proxy_states[proxy_config['state']]['blocks'] += 1
+                    self.consecutive_blocks += 1
+                    # Force rotation for next attempt
+                    self._rotate_proxy_if_needed(force_rotation=True)
+                    return []
+                
+                # Process the HTML
+                search_results = await self._process_google_html(html_content, query, num_results)
+                
+                if search_results and len(search_results) > 0:
+                    # Success! Reset consecutive blocks counter
+                    self.consecutive_blocks = 0
+                    return search_results
+                else:
+                    # Try regex extraction as a last resort
+                    return await self._extract_results_with_regex(html_content, num_results)
+            except Exception as e:
+                print(f"Error using AsyncWebCrawler with Oxylabs: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                # Mark this state as having a block
+                self.proxy_states[proxy_config['state']]['blocks'] += 1
+                self.consecutive_blocks += 1
+                # Force rotation for next attempt
+                self._rotate_proxy_if_needed(force_rotation=True)
+                return []
+            
+            if not html_content or len(html_content) < 1000:
+                print(f"Nodriver with Oxylabs did not return valid HTML content")
+                # Mark this state as having a block
+                self.proxy_states[proxy_config['state']]['blocks'] += 1
+                self.consecutive_blocks += 1
+                # Force rotation for next attempt
+                self._rotate_proxy_if_needed(force_rotation=True)
+                return []
+            
+            # Check for CAPTCHA or block page
+            if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
+                print(f"CAPTCHA or block detected with Oxylabs proxy")
+                # Mark this state as having a block
+                self.proxy_states[proxy_config['state']]['blocks'] += 1
+                self.consecutive_blocks += 1
+                # Force rotation for next attempt
+                self._rotate_proxy_if_needed(force_rotation=True)
                 return []
             
             # Process the HTML
-            html_content = result.html
             search_results = await self._process_google_html(html_content, query, num_results)
             
             if search_results and len(search_results) > 0:
+                # Success! Reset consecutive blocks counter
+                self.consecutive_blocks = 0
                 return search_results
             else:
                 # Try regex extraction as a last resort
                 return await self._extract_results_with_regex(html_content, num_results)
         except Exception as e:
-            print(f"Overall error in _direct_search_google: {str(e)}")
+            print(f"Overall error in _search_with_oxylabs_proxy: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return []
-
+    
     def _get_random_user_agent(self):
         """
         Return a random user agent string to avoid detection.
@@ -1266,10 +1837,188 @@ class SerpAnalyzer:
         ]
         return random.choice(user_agents)
 
-    async def analyze_page(self, url):
+    async def _process_google_html(self, html, query, num_results=6):
         """
-        Analyze a single page to extract SEO and content data.
+        Process Google HTML to extract search results
         
+        Args:
+            html (str): HTML content from Google search
+            query (str): The search query
+            num_results (int): Maximum number of results to extract
+            
+        Returns:
+            list: List of dictionaries containing search results
+        """
+        try:
+            print(f"Processing Google HTML for query: {query}")
+            print(f"HTML content length: {len(html)}")
+            
+            # Save a sample of the HTML for debugging
+            with open("google_html_sample.txt", "w", encoding="utf-8") as f:
+                f.write(html[:5000] + "\n\n[...content truncated...]\n\n" + html[-5000:])
+            print("Saved HTML sample to google_html_sample.txt for debugging")
+            
+            # Check for CAPTCHA or block page
+            if "captcha" in html.lower() or "unusual traffic" in html.lower():
+                print(f"CAPTCHA or block detected in HTML content")
+                return []
+            
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+            search_results = []
+            
+            # Debug: Print the title of the page to see what we're dealing with
+            page_title = soup.title.text if soup.title else "No title found"
+            print(f"Page title: {page_title}")
+            
+            # Try multiple selectors for more resilient extraction
+            all_selectors = [
+                # Approach 1: Modern Google search results (most common)
+                'div.g',
+                # Approach 2: Alternative modern layout
+                'div.tF2Cxc',
+                # Approach 3: Another alternative layout
+                'div.yuRUbf',
+                # Approach 4: Legacy layout
+                'div.rc',
+                # Approach 5: Very generic approach
+                'div[data-header-feature]',
+                # Approach 6: Even more generic
+                'div.MjjYud',
+                # Approach 7: Direct link containers
+                'a.sVXRqc',
+                # Approach 8: Another container class
+                'div.Gx5Zad',
+                # Approach 9: Most generic - any div with an h3 inside
+                'div:has(h3)'
+            ]
+            
+            results = []
+            for selector in all_selectors:
+                results = soup.select(selector)
+                print(f"Selector '{selector}' found {len(results)} elements")
+                if results and len(results) >= 1:
+                    print(f"Using selector: {selector}")
+                    break
+            
+            # If still no results, try a very generic approach - find all links
+            if not results or len(results) == 0:
+                print("No results found with standard selectors, trying generic approach...")
+                all_links = soup.find_all('a')
+                print(f"Found {len(all_links)} links in total")
+                
+                # Filter links that look like search results
+                filtered_links = []
+                for link in all_links:
+                    href = link.get('href', '')
+                    if href.startswith('http') and 'google' not in href.lower() and len(href) > 20:
+                        filtered_links.append(link)
+                
+                print(f"Filtered to {len(filtered_links)} potential result links")
+                
+                # Create pseudo-results from these links
+                results = filtered_links
+            
+            print(f"Found {len(results)} potential search results")
+            
+            # Process the results
+            for i, result in enumerate(results):
+                if i >= num_results:
+                    break
+                    
+                try:
+                    # Initialize variables
+                    title = "No title found"
+                    url = None
+                    description = ""
+                    
+                    # Handle different result types
+                    if result.name == 'a':  # If the result is directly a link
+                        url = result.get('href', '')
+                        title = result.get_text().strip() or "No title found"
+                    else:  # If the result is a container
+                        # Try to extract title and URL using multiple approaches
+                        # Approach 1: Standard layout
+                        title_elem = result.select_one('h3')
+                        if title_elem:
+                            title = title_elem.get_text().strip()
+                        
+                        # Find the link
+                        link_candidates = result.select('a')
+                        for link in link_candidates:
+                            href = link.get('href', '')
+                            if href.startswith('http') and 'google' not in href.lower():
+                                url = href
+                                break
+                        
+                        # Extract description
+                        desc_selectors = ['div.VwiC3b', 'span.st', 'div.s', 'div.lEBKkf', 'div:not(:has(h3))']  
+                        for desc_selector in desc_selectors:
+                            desc_elem = result.select_one(desc_selector)
+                            if desc_elem:
+                                description = desc_elem.get_text().strip()
+                                if description and len(description) > 20:  # Reasonable description length
+                                    break
+                    
+                    # Debug output
+                    print(f"Result #{i+1}:")
+                    print(f"  Title: {title[:50]}..." if len(title) > 50 else f"  Title: {title}")
+                    print(f"  URL: {url}")
+                    print(f"  Description: {description[:50]}..." if len(description) > 50 else f"  Description: {description}")
+                    
+                    # Validate URL
+                    if not url or not url.startswith('http'):
+                        print(f"  Skipping result #{i+1} due to invalid URL: {url}")
+                        continue
+                    
+                    # Add to results
+                    search_results.append({
+                        "title": title,
+                        "url": url,
+                        "description": description,
+                        "position": i + 1,
+                        "query": query
+                    })
+                except Exception as e:
+                    print(f"Error processing individual result #{i+1}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+            
+            print(f"Successfully extracted {len(search_results)} search results")
+            
+            # If we have results, save a sample for debugging
+            if search_results:
+                import json
+                with open("extracted_results_sample.json", "w", encoding="utf-8") as f:
+                    json.dump(search_results[:3], f, indent=2, ensure_ascii=False)
+                print("Saved sample of extracted results to extracted_results_sample.json")
+            
+            return search_results
+            
+        except Exception as e:
+            print(f"Error processing Google HTML: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    async def _extract_results_with_regex(self, html, num_results=6):
+        """
+        Extract search results using regex as a last resort
+        
+        Args:
+            html (str): HTML content from Google search
+            num_results (int): Maximum number of results to extract
+            
+        Returns:
+            list: List of dictionaries containing search results
+    
+    # If we have results, save a sample for debugging
+    if search_results:
+        import json
+        with open("extracted_results_sample.json", "w", encoding="utf-8") as f:
+            json.dump(search_results[:3], f, indent=2, ensure_ascii=False)
+        print("Saved sample of extracted results to extracted_results_sample.json")
         Args:
             url (str): URL of the page to analyze
             

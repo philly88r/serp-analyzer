@@ -1,0 +1,44 @@
+[
+  {
+    "title": "Async IO in Python: A Complete Walkthrough",
+    "url": "https://realpython.com/async-io-python/",
+    "description": "This tutorial will give you a firm grasp of Python's approach to async IO, which is a concurrent programming design that has received dedicated support in ...",
+    "position": 1,
+    "query": "python async await tutorial examples"
+  },
+  {
+    "title": "Simplest async/await example possible in Python",
+    "url": "https://stackoverflow.com/questions/50757497/simplest-async-await-example-possible-in-python",
+    "description": "A simple example showing how async / await works, by using only these two keywords + code to run the async loop + other Python code but no other asyncio ...",
+    "position": 2,
+    "query": "python async await tutorial examples"
+  },
+  {
+    "title": "asyncio — How to use Async/Await in Python. | by Sachin Pal",
+    "url": "https://geekpython.medium.com/asyncio-how-to-use-async-await-in-python-ef4372a8c2c5",
+    "description": "We use async and await when we need to fetch some data from the servers to make the execution of the function delayed until the promise is resolved.",
+    "position": 3,
+    "query": "python async await tutorial examples"
+  },
+  {
+    "title": "Coroutines and Tasks",
+    "url": "https://docs.python.org/3/library/asyncio-task.html",
+    "description": "This section outlines high-level asyncio APIs to work with coroutines and Tasks. Coroutines, Awaitables, Creating Tasks, Task Cancellation, Task Groups, ...",
+    "position": 4,
+    "query": "python async await tutorial examples"
+  },
+  {
+    "title": "asyncio in Python",
+    "url": "https://www.geeksforgeeks.org/asyncio-in-python/",
+    "description": "Apr 26, 2025 — Asynchronous Programming with Asyncio in Python. In the example below, we'll create a function and make it asynchronous using the async keyword.",
+    "position": 5,
+    "query": "python async await tutorial examples"
+  },
+  {
+    "title": "Python Async/Await",
+    "url": "https://www.pythontutorial.net/python-concurrency/python-async-await/",
+    "description": "In this tutorial, you will learn about Python coroutines and how to use the Python async and await keywords to create and pause coroutines.",
+    "position": 6,
+    "query": "python async await tutorial examples"
+  }
+]

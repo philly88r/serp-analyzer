@@ -469,7 +469,7 @@ class SerpAnalyzer:
         Returns:
             dict: SERP analysis with readable content
         """
-        GEMINI_API_KEY = "AIzaSyBl6LgSol_l_ELLHhd5YX90VeXEwdt3xPU"
+        GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
         API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
         
         readable_results = []

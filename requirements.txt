@@ -1,14 +1,16 @@
 pandas==2.1.4
 requests==2.31.0
-beautifulsoup4==4.12.2
+beautifulsoup4==4.12.2 # Already compatible with >=4.9.3
 flask==2.3.3
-Markdown>=3.0 # Added for server-side markdown rendering
+Markdown>=3.0
 python-dotenv==1.0.0
 werkzeug==2.3.7
 jinja2==3.1.2
 itsdangerous==2.1.2
 click==8.1.7
-gunicorn==21.2.0 # Added for Heroku deployment
+gunicorn==21.2.0
 asyncio==3.4.3
-crawl4ai>=0.4.247
-playwright>=1.49.0 # For browser automation
+crawl4ai>=0.4.247 # Already compatible
+playwright>=1.49.0
+httpx>=0.23.0
+stealth_serp_analyzer

@@ -7,7 +7,8 @@ import markdown
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, send_from_directory
 import generate_seo_blog
-import serp_analyzer_working
+# Import serp_analyzer directly instead of serp_analyzer_working
+# import serp_analyzer_working
 import seo_analyzer
 import md_to_html
 import glob
@@ -31,7 +32,19 @@ os.makedirs(app.config['HTML_REPORTS_FOLDER'], exist_ok=True)
 
 # Import SerpAnalyzer conditionally to handle case when browser automation is not available
 try:
-    from serp_analyzer import SerpAnalyzer
+    # Try to import analyzers in order of preference
+    try:
+        from bypass_serp import BypassSerpAnalyzer as SerpAnalyzer
+        print("Bypass SERP analyzer loaded successfully - using alternative search engines to avoid CAPTCHA")
+    except ImportError:
+        try:
+            from improved_serp_analyzer import ImprovedSerpAnalyzer as SerpAnalyzer
+            print("Improved SERP analyzer loaded successfully")
+        except ImportError:
+            # Fall back to the original analyzer if others are not available
+            from serp_analyzer import SerpAnalyzer
+            print("Original SERP analyzer loaded as fallback")
+    
     import generate_seo_blog
     BROWSER_AUTOMATION_AVAILABLE = True
     print("Browser automation dependencies loaded successfully")
@@ -202,11 +215,21 @@ def search():
         os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
         
         # Clean up old results for this query
-        if 'serp_analyzer_working' in globals():
-            try:
-                serp_analyzer_working.clean_results_directory(query)
-            except Exception as cleanup_error:
-                print(f"Warning: Could not clean up old results: {str(cleanup_error)}")
+        try:
+            # Remove old result files for this query
+            query_prefix = f"serp_{query.replace(' ', '_')}"
+            for file in glob.glob(os.path.join(app.config['RESULTS_FOLDER'], f"{query_prefix}*.json")):
+                try:
+                    os.remove(file)
+                except Exception as e:
+                    print(f"Could not remove file {file}: {str(e)}")
+            for file in glob.glob(os.path.join(app.config['RESULTS_FOLDER'], f"{query_prefix}*.csv")):
+                try:
+                    os.remove(file)
+                except Exception as e:
+                    print(f"Could not remove file {file}: {str(e)}")
+        except Exception as cleanup_error:
+            print(f"Warning: Could not clean up old results: {str(cleanup_error)}")
         
         # Create SERP analyzer with Heroku-specific configuration
         try:
@@ -632,7 +655,11 @@ def api_analyze_query(query):
     try:
         # Step 1: Run SERP Analysis
         logging.info(f"[API] Starting SERP analysis for query: {query}")
-        serp_results = asyncio.run(serp_analyzer_working.analyze_serp(query))
+        # Create SERP analyzer instance
+        analyzer = SerpAnalyzer(headless=True)
+        # Run the analysis
+        serp_results = asyncio.run(analyzer.analyze_serp(query))
+        # Save results
         with open(results_file_path, 'w', encoding='utf-8') as f:
             json.dump(serp_results, f, indent=4)
         logging.info(f"[API] SERP results saved to {results_file_path}")
