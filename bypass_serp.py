@@ -143,6 +143,122 @@ class BypassSerpAnalyzer:
             logger.error(f"Error searching Google: {str(e)}")
             traceback.print_exc()
             return []
+
+    async def analyze_page(self, url, session):
+        """
+        Analyze a single page for SEO data.
+        Uses aiohttp for asynchronous requests.
+        """
+        headers = {
+            "User-Agent": self._get_random_user_agent(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Referer": self._get_random_referrer()
+        }
+        try:
+            logger.info(f"Analyzing page: {url}")
+            self._respect_rate_limits() # Ensure we don't hit sites too fast either
+            async with session.get(url, headers=headers, timeout=20) as response:
+                if response.status != 200:
+                    logger.warning(f"Failed to fetch {url}, status: {response.status}")
+                    return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}"}
+                
+                html_content = await response.text()
+                soup = BeautifulSoup(html_content, "html.parser")
+                
+                title = soup.title.string.strip() if soup.title else ""
+                description_tag = soup.find("meta", attrs={"name": "description"})
+                description = description_tag["content"].strip() if description_tag and description_tag.get("content") else ""
+                
+                logger.info(f"Successfully analyzed: {url}, Title: {title[:50]}...")
+                return {
+                    "url": url,
+                    "title": title,
+                    "description": description,
+                    # TODO: Add more detailed SEO metrics (headings, word count, links etc.)
+                }
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout analyzing page: {url}")
+            return {"url": url, "title": "", "description": "", "error": "Timeout"}
+        except Exception as e:
+            logger.error(f"Error analyzing page {url}: {str(e)}", exc_info=True)
+            return {"url": url, "title": "", "description": "", "error": str(e)}
+
+    async def analyze_serp_for_api(self, query, num_results=10):
+        """
+        Perform SERP analysis for the API: search, analyze pages, save, and return results.
+        """
+        logger.info(f"Starting API SERP analysis for query: '{query}' with {num_results} results")
+        raw_search_results = await self.search_google(query, num_results)
+
+        analyzed_pages = []
+        if not raw_search_results:
+            logger.warning(f"No search results returned from search_google for query: {query}")
+        else:
+            # Use aiohttp.ClientSession for concurrent page fetching in analyze_page
+            async with aiohttp.ClientSession() as http_session:
+                tasks = []
+                for result in raw_search_results:
+                    if result.get('url'):
+                        tasks.append(self.analyze_page(result['url'], http_session))
+                
+                # Gather results from all analyze_page tasks
+                # Use return_exceptions=True to prevent one failed task from stopping others
+                page_analysis_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for i, analyzed_data in enumerate(page_analysis_results):
+                    original_result = raw_search_results[i] # Assuming order is maintained
+                    if isinstance(analyzed_data, Exception):
+                        logger.error(f"Exception during page analysis for {original_result.get('url')}: {analyzed_data}")
+                        analyzed_pages.append({
+                            "url": original_result.get('url'),
+                            "title": original_result.get('title', 'N/A'),
+                            "description": original_result.get('snippet', 'Failed to analyze page details.'),
+                            "error_detail": str(analyzed_data)
+                        })
+                    elif analyzed_data:
+                        # Merge raw search result data (like original snippet if analysis fails for description)
+                        # with detailed analyzed data. Analyzed data takes precedence for common fields.
+                        merged_data = {**original_result, **analyzed_data} 
+                        analyzed_pages.append(merged_data)
+                    else:
+                        # Fallback if analyze_page somehow returns None but not an exception
+                         analyzed_pages.append({
+                            "url": original_result.get('url'),
+                            "title": original_result.get('title', 'N/A'),
+                            "description": original_result.get('snippet', 'Page analysis returned no data.'),
+                        })
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename_query = re.sub(r'\W+', '_', query) # Sanitize query for filename
+        base_filename = f"{filename_query}_{timestamp}"
+        json_filename = f"{base_filename}.json"
+        
+        # Prepare final results structure for API response
+        output_data = {
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "num_requested": num_results,
+            "num_returned_search": len(raw_search_results if raw_search_results else []),
+            "num_analyzed_pages": len(analyzed_pages),
+            "results": analyzed_pages,
+            "files": {
+                "json": json_filename,
+                # "csv": f"{base_filename}.csv" # Placeholder for CSV
+            }
+        }
+
+        # Save to JSON file
+        json_filepath = os.path.join("results", json_filename)
+        try:
+            with open(json_filepath, "w", encoding="utf-8") as f:
+                json.dump(output_data, f, indent=4, ensure_ascii=False)
+            logger.info(f"Successfully saved results to {json_filepath}")
+        except Exception as e:
+            logger.error(f"Error saving results to JSON {json_filepath}: {e}")
+            # Still return data even if save fails
+
+        return output_data
     
     async def _search_with_duckduckgo(self, query, num_results=6):
         """
