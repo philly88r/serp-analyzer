@@ -23,6 +23,17 @@ app.config['ANALYSIS_FOLDER'] = 'analysis'
 app.config['BLOG_FOLDER'] = 'blogs'
 app.config['HTML_REPORTS_FOLDER'] = os.path.join(app.root_path, 'html_reports')
 
+# Import and register test routes
+try:
+    from test_routes import register_test_routes
+    app = register_test_routes(app)
+    print("Test routes registered successfully in app.py")
+except ImportError as e:
+    print(f"Warning: Could not import test_routes: {e}")
+except Exception as e:
+    print(f"Error registering test routes: {e}")
+
+
 # Create necessary folders
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)

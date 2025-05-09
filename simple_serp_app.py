@@ -19,6 +19,16 @@ logger = logging.getLogger("SimpleSerpApp")
 
 app = Flask(__name__)
 
+# Import and register test routes
+try:
+    from test_routes import register_test_routes
+    app = register_test_routes(app)
+    print("Test routes registered successfully in simple_serp_app.py")
+except ImportError as e:
+    print(f"Warning: Could not import test_routes: {e}")
+except Exception as e:
+    print(f"Error registering test routes: {e}")
+
 # Create necessary directories
 os.makedirs("results", exist_ok=True)
 os.makedirs("templates", exist_ok=True)
