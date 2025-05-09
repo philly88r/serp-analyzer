@@ -159,12 +159,36 @@ def verify_chromium_installation():
         # Import here to avoid import errors if module is missing
         from playwright.sync_api import sync_playwright
         
+        # Try to import proxy manager to use proxy if available
+        try:
+            from proxy_manager import proxy_manager
+            proxy_url = proxy_manager.get_proxy()
+            print_message(f"Proxy configuration found: {proxy_url is not None}")
+        except Exception as e:
+            print_message(f"Proxy manager not available or error loading proxy: {str(e)}")
+            proxy_url = None
+        
+        # Configure proxy for Playwright if available
+        proxy_config = None
+        if proxy_url:
+            from urllib.parse import urlparse
+            try:
+                parsed_url = urlparse(proxy_url)
+                proxy_config = {"server": f"{parsed_url.scheme}://{parsed_url.hostname}:{parsed_url.port}"}
+                if parsed_url.username:
+                    proxy_config["username"] = parsed_url.username
+                if parsed_url.password:
+                    proxy_config["password"] = parsed_url.password
+                print_message(f"Configured proxy for Playwright verification: {proxy_config['server']}")
+            except Exception as e:
+                print_error(f"Error parsing proxy URL: {str(e)}")
+        
         with sync_playwright() as p:
             # Create browser cache directory if it doesn't exist
             browser_cache_dir = os.path.join(os.getcwd(), '.browser_cache')
             os.makedirs(browser_cache_dir, exist_ok=True)
             
-            # Define browser launch arguments without user_data_dir
+            # Define browser launch arguments
             browser_args = {
                 "executable_path": None,  # Let Playwright find it
                 "args": [
@@ -175,8 +199,14 @@ def verify_chromium_installation():
                     "--single-process"
                 ],
                 "ignore_default_args": ["--disable-extensions"],
-                "timeout": 60000  # Increased timeout
+                "timeout": 60000,  # Increased timeout
+                "headless": True
             }
+            
+            # Add proxy configuration if available
+            if proxy_config:
+                print_message(f"Using proxy configuration for browser launch: {proxy_config['server']}")
+                browser_args["proxy"] = proxy_config
             
             # Always use headless mode on servers
             if platform.system() == "Linux" and (os.environ.get("DISPLAY") is None or is_render):
