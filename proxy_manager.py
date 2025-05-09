@@ -22,11 +22,22 @@ class ProxyManager:
     
     def load_config(self):
         """Load rotating proxy endpoint from environment variable or configuration file."""
-        # Try to load from environment variable first (for Heroku/production)
+        # Check if we're running on Render
+        is_render = 'RENDER' in os.environ
+        if is_render:
+            logger.info("Running on Render environment")
+            # Log all environment variables on Render (excluding sensitive ones)
+            for key in os.environ:
+                if not any(sensitive in key.lower() for sensitive in ['key', 'secret', 'password', 'token']):
+                    logger.debug(f"Render env: {key}={os.environ[key]}")
+        
+        # Try to load from environment variable first (for production)
         env_proxy_endpoint = os.environ.get('ROTATING_PROXY_ENDPOINT')
         if env_proxy_endpoint:
             self.rotating_proxy_endpoint = env_proxy_endpoint
             logger.info(f"Loaded rotating proxy endpoint from environment variable.")
+            if is_render:
+                logger.info("Successfully loaded proxy from environment variable on Render")
             # return # We should still log the final status
 
         # Fallback to config file (for local development) if not loaded from env var
