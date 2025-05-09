@@ -53,11 +53,18 @@ class ProxyManager:
             logger.warning("Rotating proxy endpoint is not configured. Attempts to use a proxy will fail.")
 
     def get_proxy(self):
-        """Get the configured rotating proxy endpoint."""
+        """Get the configured rotating proxy endpoint with http:// prefix if needed."""
         if not self.rotating_proxy_endpoint:
             logger.debug("get_proxy called but no rotating_proxy_endpoint is configured.")
             return None
-        return self.rotating_proxy_endpoint
+            
+        # Ensure the proxy URL has the http:// prefix
+        proxy_url = self.rotating_proxy_endpoint
+        if not proxy_url.startswith('http://') and not proxy_url.startswith('https://') and not proxy_url.startswith('socks5://'):
+            proxy_url = f'http://{proxy_url}'
+            logger.debug(f"Added http:// prefix to proxy URL: {proxy_url}")
+            
+        return proxy_url
     
     def report_success(self, proxy_url, response_time_ms=None):
         """Report a successful request with the proxy."""
