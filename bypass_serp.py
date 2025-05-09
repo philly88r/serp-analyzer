@@ -1277,11 +1277,11 @@ class BypassSerpAnalyzer:
 
                 # Make the request
                 async with session.get(search_url, timeout=15, proxy=proxy_url_http) as response:
-                    logger.info(f"Direct HTTP request status code: {response.status_code}")
+                    logger.info(f"Direct HTTP request status code: {response.status}")
                     
                     # Check if the request was successful
                     if response.status != 200:
-                        logger.error(f"Direct HTTP request failed with status code {response.status_code}")
+                        logger.error(f"Direct HTTP request failed with status code {response.status}")
                         # Removed: if proxy_url_http: proxy_manager.report_failure(proxy_url_http, is_block=(response.status == 403 or response.status == 429))
                         return []
                     
