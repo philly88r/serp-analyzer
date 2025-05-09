@@ -116,25 +116,25 @@ class BypassSerpAnalyzer:
                     logger.info(f"Waiting {delay:.2f} seconds before retry")
                     await asyncio.sleep(delay)
                 
-                # Method 1: Try using DuckDuckGo as a proxy to Google
+                # Method 1: Try using a direct HTTP request to Google
+                results = await self._search_with_direct_http(query, num_results)
+                
+                if results and len(results) > 0:
+                    logger.info(f"Direct HTTP request returned {len(results)} results")
+                    return results
+                
+                # Method 2: Try using DuckDuckGo as a proxy to Google
                 results = await self._search_with_duckduckgo(query, num_results)
                 
                 if results and len(results) > 0:
                     logger.info(f"DuckDuckGo search returned {len(results)} results")
                     return results
                 
-                # Method 2: Try using Bing
+                # Method 3: Try using Bing
                 results = await self._search_with_bing(query, num_results)
                 
                 if results and len(results) > 0:
                     logger.info(f"Bing search returned {len(results)} results")
-                    return results
-                
-                # Method 3: Try using a direct HTTP request to Google
-                results = await self._search_with_direct_http(query, num_results)
-                
-                if results and len(results) > 0:
-                    logger.info(f"Direct HTTP request returned {len(results)} results")
                     return results
             
             logger.error(f"All search methods and retries failed for query: {query}")
