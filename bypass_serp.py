@@ -394,6 +394,69 @@ class BypassSerpAnalyzer:
                 "num_results": 0,
                 "error": str(e)
             }
+            
+    def save_results(self, data, results_dir="results"):
+        """
+        Save search results to JSON and CSV files
+        
+        Args:
+            data: Search results data
+            results_dir: Directory to save results in
+            
+        Returns:
+            dict: File paths for JSON and CSV files
+        """
+        try:
+            # Create results directory if it doesn't exist
+            os.makedirs(results_dir, exist_ok=True)
+            
+            # Generate filenames
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            query_slug = re.sub(r'\W+', '_', data.get('query', 'unknown'))
+            json_filename = f"serp_{query_slug}_{timestamp}.json"
+            csv_filename = f"serp_{query_slug}_{timestamp}.csv"
+            
+            # Save JSON file
+            json_path = os.path.join(results_dir, json_filename)
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            
+            # Save CSV file
+            csv_path = os.path.join(results_dir, csv_filename)
+            with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                # Create CSV writer
+                import csv
+                writer = csv.writer(f)
+                
+                # Write header
+                header = ['Position', 'URL', 'Title', 'Description', 'Word Count', 'Internal Links', 'External Links']
+                writer.writerow(header)
+                
+                # Write data rows
+                for result in data.get('results', []):
+                    row = [
+                        result.get('position', ''),
+                        result.get('url', ''),
+                        result.get('title', ''),
+                        result.get('meta_description', result.get('description', '')),
+                        result.get('word_count', ''),
+                        result.get('internal_links_count', ''),
+                        result.get('external_links_count', '')
+                    ]
+                    writer.writerow(row)
+            
+            logger.info(f"Saved results to {json_path} and {csv_path}")
+            
+            return {
+                'json': json_filename,
+                'csv': csv_filename
+            }
+            
+        except Exception as e:
+            logger.error(f"Error saving results: {str(e)}", exc_info=True)
+            return {
+                'error': str(e)
+            }
 
     async def _search_with_duckduckgo(self, query, num_results=6):
         """
