@@ -11,7 +11,7 @@ from PIL import Image
 import pytesseract
 from playwright.async_api import async_playwright
 import traceback
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, urlparse
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -287,43 +287,39 @@ class BypassSerpAnalyzer:
                     # Get a proxy from the proxy manager if available
                     proxy_url = None
                     try:
-                        proxy = proxy_manager.get_proxy()
-                        if proxy:
-                            proxy_url = proxy.get('url')
+                        proxy_url = proxy_manager.get_proxy() # Get string URL directly
+                        # Removed: proxy_manager.report_success(proxy_url, response_time_ms)
+                        if proxy_url:
+                            logger.info(f"Using proxy for page analysis: {proxy_url}")
+                        else:
+                            logger.info("No proxy returned by proxy_manager for page analysis.")
                     except NameError:
                         # proxy_manager not available
+                        logger.warning("proxy_manager not available for page analysis")
                         pass
                     except Exception as e:
-                        logger.error(f"Error getting proxy: {str(e)}")
+                        logger.error(f"Error getting proxy for page analysis: {str(e)}")
                     
                     # Start timing for proxy response time calculation
                     start_time = time.time()
                 
                     async with _session.get(url, headers=headers, timeout=current_timeout, proxy=proxy_url) as response:
-                        # Calculate response time
-                        response_time_ms = (time.time() - start_time) * 1000
+                        # Stop timing
+                        end_time = time.time()
+                        response_time_ms = (end_time - start_time) * 1000
                         
-                        # Report proxy success/failure if used
-                        if proxy_url:
-                            try:
-                                if response.status == 200:
-                                    proxy_manager.report_success(proxy_url, response_time_ms)
-                                else:
-                                    proxy_manager.report_failure(proxy_url)
-                            except NameError:
-                                pass  # proxy_manager not available
-                            except Exception as e:
-                                logger.error(f"Error reporting proxy status: {str(e)}")
-                        
+                        # Check if the request was successful
                         if response.status != 200:
-                            logger.warning(f"Failed to fetch {url}, status: {response.status}")
-                            # Don't retry for non-timeout errors like 404, 403, etc.
-                            if response.status < 500:
-                                return {"url": url, "title": "", "description": "", "error": f"HTTP {response.status}", "seo_details": {}}
-                            # For server errors (5xx), continue to retry loop
-                            continue
-                    
-                        # If we got a successful response, process it
+                            logger.warning(f"HTTP error {response.status} for {url}")
+                            # Removed: if proxy_url: proxy_manager.report_failure(proxy_url, is_block=(response.status == 403 or response.status == 429))
+                            if attempt == max_retries - 1:
+                                return {"url": url, "title": "", "description": "", "error": f"HTTP error {response.status}", "seo_details": {}}
+                            await asyncio.sleep(2 * (attempt + 1)) # Exponential backoff for retries
+                            continue # Try next attempt
+
+                        # Removed: if proxy_url: proxy_manager.report_success(proxy_url, response_time_ms)
+
+                        # Get the HTML content
                         html_content = await response.text()
                         soup = BeautifulSoup(html_content, "html.parser")
                     
@@ -774,8 +770,31 @@ class BypassSerpAnalyzer:
             self._respect_rate_limits()
             
             async with async_playwright() as p:
-                # Launch browser with stealth mode
-                browser = await p.chromium.launch(headless=self.headless)
+                # Prepare Playwright proxy configuration
+                proxy_config_playwright = None
+                raw_proxy_url = None # Store the raw URL for logging purposes
+                try:
+                    raw_proxy_url = proxy_manager.get_proxy()
+                    if raw_proxy_url:
+                        parsed_url = urlparse(raw_proxy_url)
+                        proxy_config_playwright = {"server": f"{parsed_url.scheme}://{parsed_url.hostname}:{parsed_url.port}"}
+                        if parsed_url.username:
+                            proxy_config_playwright["username"] = parsed_url.username
+                        if parsed_url.password:
+                            proxy_config_playwright["password"] = parsed_url.password
+                        logger.info(f"Playwright will use proxy server: {proxy_config_playwright['server']}")
+                    else:
+                        logger.info("No proxy returned by proxy_manager for Playwright search.")
+                except NameError:
+                    logger.warning("proxy_manager not available for Playwright search")
+                except Exception as e:
+                    logger.error(f"Error configuring proxy for Playwright: {str(e)}")
+
+                # Launch browser with stealth mode and proxy if configured
+                browser = await p.chromium.launch(
+                    headless=self.headless,
+                    proxy=proxy_config_playwright
+                )
                 context = await browser.new_context(
                     viewport={'width': 1280, 'height': 800},
                     user_agent=self._get_random_user_agent(),
@@ -1243,138 +1262,148 @@ class BypassSerpAnalyzer:
                 "1P_JAR": datetime.now().strftime("%Y-%m-%d-%H")
             }
             
-            # Make the request with a longer timeout
-            response = self.session.get(
-                search_url, 
-                headers=headers, 
-                cookies=cookies,
-                timeout=20
-            )
-            
-            logger.info(f"Direct HTTP request status code: {response.status_code}")
-            
-            # Check if the request was successful
-            if response.status_code != 200:
-                logger.error(f"Direct HTTP request failed with status code {response.status_code}")
-                return []
-            
-            # Get the HTML content
-            html_content = response.text
-            
-            # Check for CAPTCHA or block page
-            if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
-                logger.warning("CAPTCHA or block detected in direct HTTP response")
-                self.captcha_detected = True
-                return []
-            
-            # Save the HTML for debugging
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            debug_file = f"debug/google_{timestamp}.html"
-            with open(debug_file, "w", encoding="utf-8") as f:
-                f.write(html_content)
-            logger.info(f"Saved HTML to {debug_file} for debugging")
-            
-            # Parse the HTML
-            soup = BeautifulSoup(html_content, "html.parser")
-            
-            # Extract search results
-            results = []
-            
-            # Method 1: Look for standard Google result containers
-            selectors = [
-                'div.g', 'div.kvH3mc', 'div.Ww4FFb', 'div.Gx5Zad', 'div.MjjYud',
-                'div.tF2Cxc', 'div.yuRUbf', 'div.rc', 
-                'div[data-header-feature]', 'div[jscontroller][data-hveid]'
-            ]
-            
-            for selector in selectors:
-                containers = soup.select(selector)
-                logger.info(f"Selector '{selector}' found {len(containers)} elements")
-                
-                for container in containers:
-                    # Extract title
-                    title_element = container.select_one('h3')
-                    if not title_element:
-                        continue
+            async with aiohttp.ClientSession(headers=headers) as session:
+                proxy_url_http = None
+                try:
+                    proxy_url_http = proxy_manager.get_proxy() # Get string URL directly
+                    if proxy_url_http:
+                        logger.info(f"Using proxy for direct HTTP search: {proxy_url_http}")
+                    else:
+                        logger.info("No proxy returned by proxy_manager for direct HTTP search.")
+                except NameError:
+                    logger.warning("proxy_manager not available for direct HTTP search")
+                except Exception as e:
+                    logger.error(f"Error getting proxy for direct HTTP: {str(e)}")
+
+                # Make the request
+                async with session.get(search_url, timeout=15, proxy=proxy_url_http) as response:
+                    logger.info(f"Direct HTTP request status code: {response.status_code}")
                     
-                    title = title_element.get_text().strip()
+                    # Check if the request was successful
+                    if response.status != 200:
+                        logger.error(f"Direct HTTP request failed with status code {response.status_code}")
+                        # Removed: if proxy_url_http: proxy_manager.report_failure(proxy_url_http, is_block=(response.status == 403 or response.status == 429))
+                        return []
                     
-                    # Extract URL
-                    link_element = container.select_one('a')
-                    if not link_element:
-                        continue
+                    # Removed: if proxy_url_http: proxy_manager.report_success(proxy_url_http)
+
+                    # Get the HTML content
+                    html_content = await response.text()
                     
-                    url = link_element.get('href', '')
-                    if not url.startswith('http'):
-                        continue
+                    # Check for CAPTCHA or block page
+                    if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
+                        logger.warning("CAPTCHA or block detected in direct HTTP response")
+                        self.captcha_detected = True
+                        return []
                     
-                    # Extract description
-                    description = ""
-                    desc_selectors = [
-                        'div.VwiC3b', 'div.Z26q7c.UK95Uc', 'span.MUxGbd.yDYNvb.lyLwlc',
-                        'div[data-sncf~="1"]', 'span.st', 'div.s'
+                    # Save the HTML for debugging
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    debug_file = f"debug/google_{timestamp}.html"
+                    with open(debug_file, "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    logger.info(f"Saved HTML to {debug_file} for debugging")
+                    
+                    # Parse the HTML
+                    soup = BeautifulSoup(html_content, "html.parser")
+                    
+                    # Extract search results
+                    results = []
+                    
+                    # Method 1: Look for standard Google result containers
+                    selectors = [
+                        'div.g', 'div.kvH3mc', 'div.Ww4FFb', 'div.Gx5Zad', 'div.MjjYud',
+                        'div.tF2Cxc', 'div.yuRUbf', 'div.rc', 
+                        'div[data-header-feature]', 'div[jscontroller][data-hveid]'
                     ]
-                    for desc_selector in desc_selectors:
-                        desc_element = container.select_one(desc_selector)
-                        if desc_element:
-                            description = desc_element.get_text().strip()
+                    
+                    for selector in selectors:
+                        containers = soup.select(selector)
+                        logger.info(f"Selector '{selector}' found {len(containers)} elements")
+                        
+                        for container in containers:
+                            # Extract title
+                            title_element = container.select_one('h3')
+                            if not title_element:
+                                continue
+                            
+                            title = title_element.get_text().strip()
+                            
+                            # Extract URL
+                            link_element = container.select_one('a')
+                            if not link_element:
+                                continue
+                            
+                            url = link_element.get('href', '')
+                            if not url.startswith('http'):
+                                continue
+                            
+                            # Extract description
+                            description = ""
+                            desc_selectors = [
+                                'div.VwiC3b', 'div.Z26q7c.UK95Uc', 'span.MUxGbd.yDYNvb.lyLwlc',
+                                'div[data-sncf~="1"]', 'span.st', 'div.s'
+                            ]
+                            for desc_selector in desc_selectors:
+                                desc_element = container.select_one(desc_selector)
+                                if desc_element:
+                                    description = desc_element.get_text().strip()
+                                    break
+                            
+                            # Add to results
+                            results.append({
+                                "title": title,
+                                "url": url,
+                                "description": description,
+                                "position": len(results) + 1,
+                                "query": query
+                            })
+                            
+                            # Stop once we have enough results
+                            if len(results) >= num_results:
+                                break
+                        
+                        # If we found results with this selector, stop trying others
+                        if len(results) >= num_results:
                             break
                     
-                    # Add to results
-                    results.append({
-                        "title": title,
-                        "url": url,
-                        "description": description,
-                        "position": len(results) + 1,
-                        "query": query
-                    })
+                    # If we didn't find enough results with the selectors, try extracting all links
+                    if len(results) < num_results:
+                        # Get all links
+                        links = soup.find_all('a')
+                        logger.info(f"Found {len(links)} links in HTML")
+                        
+                        # Filter links that look like search results
+                        for link in links:
+                            # Skip if we already have enough results
+                            if len(results) >= num_results:
+                                break
+                            
+                            href = link.get('href', '')
+                            # Skip Google's own links and other non-result URLs
+                            if not href.startswith('http') or 'google' in href.lower():
+                                continue
+                            
+                            # Get the title
+                            title = link.get_text().strip()
+                            if not title:
+                                continue
+                            
+                            # Check if this URL is already in the results
+                            if any(r['url'] == href for r in results):
+                                continue
+                            
+                            # Add to results
+                            results.append({
+                                "title": title,
+                                "url": href,
+                                "description": "",
+                                "position": len(results) + 1,
+                                "query": query
+                            })
                     
-                    # Stop once we have enough results
-                    if len(results) >= num_results:
-                        break
-                
-                # If we found results with this selector, stop trying others
-                if len(results) >= num_results:
-                    break
-            
-            # If we didn't find enough results with the selectors, try extracting all links
-            if len(results) < num_results:
-                # Get all links
-                links = soup.find_all('a')
-                logger.info(f"Found {len(links)} links in HTML")
-                
-                # Filter links that look like search results
-                for link in links:
-                    # Skip if we already have enough results
-                    if len(results) >= num_results:
-                        break
+                    logger.info(f"Extracted {len(results)} results from direct HTTP request")
+                    return results
                     
-                    href = link.get('href', '')
-                    # Skip Google's own links and other non-result URLs
-                    if not href.startswith('http') or 'google' in href.lower():
-                        continue
-                    
-                    # Get the title
-                    title = link.get_text().strip()
-                    if not title:
-                        continue
-                    
-                    # Check if this URL is already in the results
-                    if any(r['url'] == href for r in results):
-                        continue
-                    
-                    # Add to results
-                    results.append({
-                        "title": title,
-                        "url": href,
-                        "description": "",
-                        "position": len(results) + 1,
-                        "query": query
-                    })
-            
-            logger.info(f"Extracted {len(results)} results from direct HTTP request")
-            return results
-            
         except Exception as e:
             logger.error(f"Error in direct HTTP request: {str(e)}")
             traceback.print_exc()
