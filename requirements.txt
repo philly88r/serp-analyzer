@@ -11,6 +11,6 @@ click==8.1.7
 gunicorn==21.2.0
 asyncio==3.4.3
 crawl4ai>=0.4.247 # Already compatible
-playwright>=1.49.0
+playwright==1.49.0
 httpx>=0.23.0
 aiohttp>=3.9.0 # Or a recent compatible version

@@ -3,6 +3,8 @@ import json
 import os
 import random
 import time
+import sys
+from playwright.async_api import async_playwright
 import traceback
 from urllib.parse import quote_plus, urlencode
 import requests
@@ -116,21 +118,32 @@ class BypassSerpAnalyzer:
                     logger.info(f"Waiting {delay:.2f} seconds before retry")
                     await asyncio.sleep(delay)
                 
-                # Method 1: Try using a direct HTTP request to Google
+                # Method 1: Try using Playwright for Google search
+                try:
+                    results = await self._search_with_playwright(query, num_results)
+                    
+                    if results and len(results) > 0:
+                        logger.info(f"Playwright Google search returned {len(results)} results")
+                        return results
+                except Exception as e:
+                    logger.error(f"Playwright search failed: {str(e)}")
+                    logger.info("Falling back to other search methods")
+                
+                # Method 2: Try using a direct HTTP request to Google
                 results = await self._search_with_direct_http(query, num_results)
                 
                 if results and len(results) > 0:
                     logger.info(f"Direct HTTP request returned {len(results)} results")
                     return results
 
-                # Method 2: Try using Bing
+                # Method 3: Try using Bing
                 results = await self._search_with_bing(query, num_results)
                 
                 if results and len(results) > 0:
                     logger.info(f"Bing search returned {len(results)} results")
                     return results
                 
-                # Method 3: Try using DuckDuckGo as a proxy to Google
+                # Method 4: Try using DuckDuckGo as a proxy to Google
                 results = await self._search_with_duckduckgo(query, num_results)
                 
                 if results and len(results) > 0:
@@ -529,6 +542,161 @@ class BypassSerpAnalyzer:
             
         except Exception as e:
             logger.error(f"Error in Bing search: {str(e)}")
+            traceback.print_exc()
+            return []
+    
+    async def _search_with_playwright(self, query, num_results=6):
+        """
+        Search Google using Playwright browser automation.
+        This method provides a more reliable way to extract search results
+        by using a real browser instance.
+        """
+        try:
+            logger.info(f"Starting Playwright Google search for: {query}")
+            
+            # Respect rate limits
+            self._respect_rate_limits()
+            
+            async with async_playwright() as p:
+                # Launch browser with stealth mode
+                browser = await p.chromium.launch(headless=self.headless)
+                context = await browser.new_context(
+                    viewport={'width': 1280, 'height': 800},
+                    user_agent=self._get_random_user_agent(),
+                    locale="en-US"
+                )
+                
+                # Add stealth mode
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [{name: 'Chrome PDF Plugin'}, {name: 'Chrome PDF Viewer'}, {name: 'Native Client'}] });
+                    window.chrome = { runtime: {} };
+                """)
+                
+                # Create a new page
+                page = await context.new_page()
+                
+                # Construct the search URL
+                params = {
+                    "q": query,
+                    "num": num_results * 2,  # Request more results than needed
+                    "hl": "en",
+                    "gl": "us",
+                    "pws": "0"  # Disable personalized results
+                }
+                
+                # Build the query string
+                query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+                search_url = f"https://www.google.com/search?{query_string}"
+                
+                logger.info(f"Navigating to: {search_url}")
+                
+                # Navigate to the search URL
+                await page.goto(search_url, wait_until="networkidle")
+                
+                # Wait for search results to load
+                await page.wait_for_selector("#search", timeout=10000)
+                
+                # Save screenshot for debugging
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                screenshot_path = f"debug/google_screenshot_{timestamp}.png"
+                await page.screenshot(path=screenshot_path)
+                logger.info(f"Saved screenshot to {screenshot_path}")
+                
+                # Save HTML for debugging
+                html_content = await page.content()
+                debug_file = f"debug/google_playwright_{timestamp}.html"
+                with open(debug_file, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                logger.info(f"Saved HTML to {debug_file} for debugging")
+                
+                # Check for CAPTCHA
+                if await page.query_selector("#captcha-form") or "captcha" in html_content.lower():
+                    logger.warning("CAPTCHA detected on Google search page")
+                    self.captcha_detected = True
+                    self.block_count += 1
+                    await browser.close()
+                    return []
+                
+                # Extract search results
+                results = []
+                
+                # Try multiple selectors for search result containers
+                selectors = [
+                    "div.g", "div.kvH3mc", "div.Ww4FFb", "div.Gx5Zad", "div.MjjYud",
+                    "div.tF2Cxc", "div.yuRUbf", "div.rc", 
+                    "div[data-header-feature]", "div[jscontroller][data-hveid]"
+                ]
+                
+                for selector in selectors:
+                    # Use JavaScript to extract results
+                    result_data = await page.evaluate(f"""
+                        (selector) => {{
+                            const containers = document.querySelectorAll(selector);
+                            const results = [];
+                            
+                            containers.forEach((container, index) => {{
+                                // Extract title
+                                const titleElement = container.querySelector('h3');
+                                if (!titleElement) return;
+                                
+                                const title = titleElement.textContent.trim();
+                                
+                                // Extract URL
+                                const linkElement = container.querySelector('a');
+                                if (!linkElement) return;
+                                
+                                const url = linkElement.href;
+                                if (!url.startsWith('http')) return;
+                                
+                                // Extract description
+                                let description = "";
+                                const descSelectors = [
+                                    'div.VwiC3b', 'div.Z26q7c.UK95Uc', 'span.MUxGbd.yDYNvb.lyLwlc',
+                                    'div[data-sncf~="1"]', 'span.st', 'div.s'
+                                ];
+                                
+                                for (const descSelector of descSelectors) {{
+                                    const descElement = container.querySelector(descSelector);
+                                    if (descElement) {{
+                                        description = descElement.textContent.trim();
+                                        break;
+                                    }}
+                                }}
+                                
+                                results.push({{
+                                    title,
+                                    url,
+                                    description,
+                                    position: index + 1
+                                }});
+                            }});
+                            
+                            return results;
+                        }}
+                    """, selector)
+                    
+                    logger.info(f"Selector '{selector}' found {len(result_data)} elements")
+                    
+                    if result_data and len(result_data) > 0:
+                        for item in result_data:
+                            # Add query to each result
+                            item["query"] = query
+                            results.append(item)
+                        
+                        # Stop once we have enough results
+                        if len(results) >= num_results:
+                            results = results[:num_results]  # Limit to requested number
+                            break
+                
+                # Close browser
+                await browser.close()
+                
+                logger.info(f"Extracted {len(results)} results using Playwright")
+                return results
+                
+        except Exception as e:
+            logger.error(f"Error in Playwright Google search: {str(e)}")
             traceback.print_exc()
             return []
     
