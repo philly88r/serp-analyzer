@@ -26,19 +26,32 @@ class ProxyManager:
         is_render = 'RENDER' in os.environ
         if is_render:
             logger.info("Running on Render environment")
-            # Log all environment variables on Render (excluding sensitive ones)
-            for key in os.environ:
-                if not any(sensitive in key.lower() for sensitive in ['key', 'secret', 'password', 'token']):
-                    logger.debug(f"Render env: {key}={os.environ[key]}")
+            # Log ALL environment variables on Render for debugging (excluding full values of sensitive ones)
+            logger.info("Environment variables on Render:")
+            for key in sorted(os.environ.keys()):
+                value = os.environ[key]
+                if any(sensitive in key.lower() for sensitive in ['key', 'secret', 'password', 'token', 'proxy']):
+                    # Show just the first few characters of sensitive values
+                    if value and len(value) > 5:
+                        value = value[:5] + '...' 
+                    logger.info(f"Render env (sensitive): {key}={value}")
+                else:
+                    logger.info(f"Render env: {key}={value}")
         
-        # Try to load from environment variable first (for production)
-        env_proxy_endpoint = os.environ.get('ROTATING_PROXY_ENDPOINT')
-        if env_proxy_endpoint:
-            self.rotating_proxy_endpoint = env_proxy_endpoint
-            logger.info(f"Loaded rotating proxy endpoint from environment variable.")
-            if is_render:
-                logger.info("Successfully loaded proxy from environment variable on Render")
-            # return # We should still log the final status
+        # Try multiple environment variable names for the proxy
+        proxy_env_vars = ['ROTATING_PROXY_ENDPOINT', 'PROXY_URL', 'HTTP_PROXY', 'HTTPS_PROXY']
+        for env_var in proxy_env_vars:
+            env_proxy_endpoint = os.environ.get(env_var)
+            if env_proxy_endpoint:
+                self.rotating_proxy_endpoint = env_proxy_endpoint
+                logger.info(f"Loaded rotating proxy endpoint from environment variable: {env_var}")
+                if is_render:
+                    logger.info(f"Successfully loaded proxy from environment variable {env_var} on Render")
+                break
+        
+        # If we found a proxy in env vars, we can return early
+        if self.rotating_proxy_endpoint:
+            return
 
         # Fallback to config file (for local development) if not loaded from env var
         if not self.rotating_proxy_endpoint:
@@ -70,8 +83,17 @@ class ProxyManager:
 
     def get_proxy(self):
         """Get the configured rotating proxy endpoint with http:// prefix if needed."""
+        # Check if we're on Render and need to use a hardcoded proxy as fallback
+        is_render = 'RENDER' in os.environ
+        
         if not self.rotating_proxy_endpoint:
-            logger.debug("get_proxy called but no rotating_proxy_endpoint is configured.")
+            logger.warning("get_proxy called but no rotating_proxy_endpoint is configured.")
+            
+            # On Render, provide a default proxy as fallback if environment variables aren't working
+            if is_render:
+                logger.info("Using hardcoded fallback proxy for Render environment")
+                fallback_proxy = "http://customer-pematthews41_5eo28-cc-us:Yitbos88++88@pr.oxylabs.io:7777"
+                return fallback_proxy
             return None
             
         # Ensure the proxy URL has the http:// prefix
@@ -79,6 +101,10 @@ class ProxyManager:
         if not proxy_url.startswith('http://') and not proxy_url.startswith('https://') and not proxy_url.startswith('socks5://'):
             proxy_url = f'http://{proxy_url}'
             logger.debug(f"Added http:// prefix to proxy URL: {proxy_url}")
+        
+        # Log proxy usage on Render for debugging
+        if is_render:
+            logger.info(f"Using proxy on Render: {proxy_url[:10]}...")
             
         return proxy_url
     
