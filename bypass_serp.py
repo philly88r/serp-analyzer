@@ -866,33 +866,8 @@ class BypassSerpAnalyzer:
                     f.write(html_content)
                 logger.info(f"Saved HTML to {debug_file} for debugging")
                 
-                # Check for CAPTCHA or other anti-bot measures
-                captcha_indicators = [
-                    "#captcha-form", 
-                    "form[action*='captcha']", 
-                    "img[src*='captcha']",
-                    "div.g-recaptcha",
-                    "#recaptcha"
-                ]
-                
-                captcha_detected = False
-                captcha_element = None
-                
-                for indicator in captcha_indicators:
-                    captcha_element = await page.query_selector(indicator)
-                    if captcha_element:
-                        logger.warning(f"CAPTCHA detected on Google search page via selector: {indicator}")
-                        captcha_detected = True
-                        break
-                
-                # Also check content for common CAPTCHA phrases
-                if not captcha_detected:
-                    captcha_phrases = ["captcha", "unusual traffic", "automated queries", "verify you're a human"]
-                    for phrase in captcha_phrases:
-                        if phrase in html_content.lower():
-                            logger.warning(f"CAPTCHA detected on Google search page via phrase: {phrase}")
-                            captcha_detected = True
-                            break
+                # Use enhanced CAPTCHA detection for more comprehensive checks
+                captcha_detected = await self.enhanced_check_for_captcha(page, html_content)
                 
                 # If CAPTCHA is detected, try to solve it
                 if captcha_detected:
@@ -1073,19 +1048,26 @@ class BypassSerpAnalyzer:
                 logger.info(f"Extracted {len(results)} results using Playwright")
                 return results
                 
-        except Exception as e:
-            logger.error(f"Error in Playwright Google search: {str(e)}")
-            traceback.print_exc()
             return []
-    
-    async def _solve_captcha(self, page):
-        """
-        Attempt to solve Google CAPTCHA using OCR and image processing.
-        
-        Args:
-            page: Playwright page object with CAPTCHA loaded
+    except Exception as e:
+        logger.error(f"Error solving CAPTCHA: {str(e)}")
+        await browser.close()
+        return []
+
+# Extract search results
+results = []
+
+# Try multiple selectors for search result containers
+# First, try a more general approach to find all search results
+try:
+    # This JavaScript will find all likely search result containers
+    general_results = await page.evaluate("""
+        function() {
+            const results = [];
             
-        Returns:
+            // Find all elements that look like search results
+            // Look for elements with titles (h3) and links
+            const h3Elements = Array.from(document.querySelectorAll('h3'));
             bool: True if CAPTCHA was solved, False otherwise
         """
         try:
@@ -1202,6 +1184,112 @@ class BypassSerpAnalyzer:
             logger.error(f"Error processing CAPTCHA image: {str(e)}")
             traceback.print_exc()
             return ""
+    
+    async def enhanced_check_for_captcha(self, page, html_content=None):
+        """
+        More comprehensive CAPTCHA detection with multiple detection methods.
+        
+        Args:
+            page: Playwright page object to check for CAPTCHA
+            html_content: Optional HTML content if already available
+            
+        Returns:
+            bool: True if CAPTCHA was detected, False otherwise
+        """
+        captcha_detected = False
+        
+        # Get HTML content if not provided
+        if html_content is None:
+            try:
+                html_content = await page.content()
+            except Exception as e:
+                logger.error(f"Error getting page content: {str(e)}")
+                html_content = ""
+        
+        # Check for common CAPTCHA selectors
+        captcha_selectors = [
+            "#captcha-form",
+            "form#captcha",
+            "form[action*='captcha']",
+            "input[name='captcha']",
+            "img[src*='captcha']",
+            "div.g-recaptcha",
+            "iframe[src*='recaptcha']",
+            "#recaptcha",
+            ".recaptcha",
+            "#captcha",
+            ".captcha-container",
+            "div:has-text('unusual traffic')",
+            "div:has-text('verify you are a human')"
+        ]
+        
+        for selector in captcha_selectors:
+            try:
+                element = await page.query_selector(selector)
+                if element:
+                    captcha_detected = True
+                    logger.warning(f"CAPTCHA detected via selector: {selector}")
+                    break
+            except Exception as e:
+                logger.debug(f"Error checking selector {selector}: {str(e)}")
+        
+        # Check page title for CAPTCHA indicators
+        try:
+            title = await page.title()
+            captcha_title_indicators = ["captcha", "unusual traffic", "verify", "robot", "automated", "security check"]
+            if any(indicator in title.lower() for indicator in captcha_title_indicators):
+                captcha_detected = True
+                logger.warning(f"CAPTCHA detected via page title: {title}")
+        except Exception as e:
+            logger.debug(f"Error checking page title: {str(e)}")
+        
+        # Check HTML content for CAPTCHA phrases
+        if not captcha_detected and html_content:
+            captcha_phrases = [
+                "captcha", 
+                "unusual traffic", 
+                "automated queries", 
+                "verify you're a human",
+                "verify you are human",
+                "suspicious activity",
+                "security challenge",
+                "please confirm you are a human",
+                "we need to verify that you are not a robot",
+                "please solve this puzzle",
+                "security check",
+                "traffic from your network"
+            ]
+            for phrase in captcha_phrases:
+                if phrase in html_content.lower():
+                    captcha_detected = True
+                    logger.warning(f"CAPTCHA detected via phrase: {phrase}")
+                    break
+        
+        # Check for blocked status codes in response headers
+        try:
+            response = page.main_frame.request.response
+            if response:
+                status = response.status
+                if status in [403, 429, 503]:
+                    captcha_detected = True
+                    logger.warning(f"Possible CAPTCHA/block detected via status code: {status}")
+        except Exception as e:
+            logger.debug(f"Error checking response status: {str(e)}")
+        
+        # If CAPTCHA detected, increment block count for backoff strategy
+        if captcha_detected:
+            self.captcha_detected = True
+            self.block_count += 1
+            # Take an additional screenshot of the CAPTCHA
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                captcha_screenshot_path = f"debug/captcha_screenshot_{timestamp}.png"
+                await page.screenshot(path=captcha_screenshot_path)
+                logger.info(f"Saved CAPTCHA screenshot to {captcha_screenshot_path}")
+            except Exception as e:
+                logger.error(f"Error saving CAPTCHA screenshot: {str(e)}")
+        
+        return captcha_detected
     
     async def _search_with_direct_http(self, query, num_results=6):
         """
