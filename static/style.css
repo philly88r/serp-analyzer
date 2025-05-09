@@ -385,4 +385,72 @@ input[type="text"]:focus, select:focus {
         margin: 5px 0;
     }
 }
+
+/* Proxy Status Styles */
+.proxy-status-card {
+    margin-top: 20px;
+}
+
+.proxy-status {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: #ccc; /* Default color */
+}
+
+.status-active {
+    background-color: #28a745; /* Green for active */
+    box-shadow: 0 0 5px #28a745;
+}
+
+.status-inactive {
+    background-color: #dc3545; /* Red for inactive */
+}
+
+.status-testing {
+    background-color: #ffc107; /* Yellow for testing */
+    animation: pulse 1.5s infinite;
+}
+
+.status-error {
+    background-color: #dc3545; /* Red for error */
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+.proxy-details {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 0.9rem;
+}
+
+.proxy-actions {
+    margin-top: 10px;
+}
     

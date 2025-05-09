@@ -44,6 +44,31 @@
                     </form>
                 </div>
             </div>
+            
+            <!-- Proxy Status Card -->
+            <div class="card proxy-status-card">
+                <div class="card-header">
+                    <h2><i class="fas fa-shield-alt"></i> Proxy Status</h2>
+                </div>
+                <div class="card-body">
+                    <div id="proxy-status" class="proxy-status">
+                        <div class="status-indicator">
+                            <span id="proxy-indicator" class="status-dot"></span>
+                            <span id="proxy-text">Checking proxy status...</span>
+                        </div>
+                        <div class="proxy-details">
+                            <p><strong>System:</strong> Rotating Proxy</p>
+                            <p><strong>Provider:</strong> <span id="proxy-provider">Oxylabs</span></p>
+                            <p><strong>Last Used:</strong> <span id="proxy-last-used">Not used yet</span></p>
+                        </div>
+                        <div class="proxy-actions">
+                            <button id="test-proxy" class="btn-secondary">
+                                <i class="fas fa-sync"></i> Test Connection
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </section>
 
         <div id="loading" class="loading-container" style="display: none;">
@@ -170,9 +195,69 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
     <script src="{{ url_for('static', filename='test-script.js') }}"></script>
+    
+    <!-- Proxy Status Script -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const proxyIndicator = document.getElementById('proxy-indicator');
+            const proxyText = document.getElementById('proxy-text');
+            const proxyLastUsed = document.getElementById('proxy-last-used');
+            const testProxyButton = document.getElementById('test-proxy');
+            
+            // Function to check proxy status
+            function checkProxyStatus() {
+                fetch('/api/proxy/status')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'active') {
+                            proxyIndicator.className = 'status-dot status-active';
+                            proxyText.textContent = 'Proxy Active';
+                            if (data.last_used) {
+                                proxyLastUsed.textContent = new Date(data.last_used).toLocaleString();
+                            }
+                        } else {
+                            proxyIndicator.className = 'status-dot status-inactive';
+                            proxyText.textContent = 'Proxy Inactive';
+                        }
+                    })
+                    .catch(error => {
+                        proxyIndicator.className = 'status-dot status-error';
+                        proxyText.textContent = 'Error checking proxy';
+                        console.error('Error checking proxy status:', error);
+                    });
+            }
+            
+            // Test proxy connection
+            testProxyButton.addEventListener('click', function() {
+                proxyIndicator.className = 'status-dot status-testing';
+                proxyText.textContent = 'Testing proxy connection...';
+                
+                fetch('/api/proxy/test')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            proxyIndicator.className = 'status-dot status-active';
+                            proxyText.textContent = 'Proxy connection successful';
+                            proxyLastUsed.textContent = new Date().toLocaleString();
+                        } else {
+                            proxyIndicator.className = 'status-dot status-error';
+                            proxyText.textContent = 'Proxy connection failed';
+                        }
+                    })
+                    .catch(error => {
+                        proxyIndicator.className = 'status-dot status-error';
+                        proxyText.textContent = 'Error testing proxy';
+                        console.error('Error testing proxy connection:', error);
+                    });
+            });
+            
+            // Check proxy status on page load
+            checkProxyStatus();
+        });
+    </script>
 
     <div class="info-box">
-        <p><strong>Note:</strong> If the regular search is not working, please use the green "Test Simple Search" button that appears below the search form.</p>
+        <p><strong>Note:</strong> This application uses a rotating proxy system to bypass search engine limitations. The proxy status is displayed above the search form.</p>
     </div>
 </body>
 </html>

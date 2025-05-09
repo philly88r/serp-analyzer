@@ -588,6 +588,75 @@ def delete(query):
 # API Endpoints
 # ===========================
 
+@app.route('/api/proxy/status', methods=['GET'])
+def api_proxy_status():
+    """API endpoint to check the status of the proxy system."""
+    try:
+        from proxy_manager import proxy_manager
+        proxy_url = proxy_manager.get_proxy()
+        
+        if proxy_url:
+            # Get the last used timestamp if available
+            last_used = None
+            
+            return jsonify({
+                'status': 'active',
+                'last_used': last_used,
+                'message': 'Proxy system is active and configured.'
+            })
+        else:
+            return jsonify({
+                'status': 'inactive',
+                'message': 'Proxy system is inactive or not properly configured.'
+            })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error checking proxy status: {str(e)}'
+        }), 500
+
+@app.route('/api/proxy/test', methods=['GET'])
+def api_proxy_test():
+    """API endpoint to test the proxy connection."""
+    try:
+        import requests
+        from proxy_manager import proxy_manager
+        
+        proxy_url = proxy_manager.get_proxy()
+        
+        if not proxy_url:
+            return jsonify({
+                'success': False,
+                'message': 'No proxy configured.'
+            })
+        
+        # Test the proxy with a simple request to a test site
+        proxies = {
+            'http': proxy_url,
+            'https': proxy_url
+        }
+        
+        # Use a test URL that returns IP information
+        response = requests.get('https://httpbin.org/ip', proxies=proxies, timeout=10)
+        
+        if response.status_code == 200:
+            ip_data = response.json()
+            return jsonify({
+                'success': True,
+                'message': 'Proxy connection successful',
+                'ip_info': ip_data
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'Proxy test failed with status code: {response.status_code}'
+            })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error testing proxy connection: {str(e)}'
+        }), 500
+
 @app.route('/api/results/<query>', methods=['GET'])
 def api_get_results(query):
     """API endpoint to get the latest SERP results JSON for a query."""
