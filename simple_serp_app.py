@@ -394,7 +394,8 @@ def get_analyzer():
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    logger.info("Main page '/' accessed.")
+    return render_template("index.html")
 
 @app.route('/search', methods=['POST'])
 def search():
