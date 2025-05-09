@@ -15,6 +15,22 @@ import glob
 import io
 import logging
 
+# Configure logging to show DEBUG level messages
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('serp_analyzer.log')
+    ]
+)
+# Ensure third-party loggers don't overwhelm our logs
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('playwright').setLevel(logging.INFO)
+
+# Create a logger for this module
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 app.secret_key = 'seo_analyzer_secret_key'
 app.config['UPLOAD_FOLDER'] = 'uploads'
