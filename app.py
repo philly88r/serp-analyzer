@@ -507,11 +507,14 @@ def view_blog(query):
         html_path = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_name)
         
         if os.path.exists(html_path):
-            html_file = html_path
+            # Create a URL path for the HTML file instead of a file system path
+            html_file = url_for('serve_html_report', filename=html_name)
         else:
             # Convert to HTML if not exists
             try:
-                html_file = md_to_html.convert_md_to_html(blog_file, app.config['HTML_REPORTS_FOLDER'])
+                generated_html_path = md_to_html.convert_md_to_html(blog_file, app.config['HTML_REPORTS_FOLDER'])
+                if generated_html_path:
+                    html_file = url_for('serve_html_report', filename=html_name)
             except Exception as e:
                 print(f"Error generating HTML: {str(e)}")
         
