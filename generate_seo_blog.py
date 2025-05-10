@@ -6,6 +6,10 @@ import argparse
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
+import csv
+import random
+import markdown
+from api_config import GEMINI_API_KEY, GEMINI_FLASH_API_URL
 
 def load_seo_analysis(json_file):
     """Load SEO analysis data from JSON file"""
@@ -53,11 +57,22 @@ def extract_seo_insights(seo_data):
     }
 
 def extract_unique_features(result):
-    """Extract unique features from a competitor's page"""
+    """Extract unique features and facts from a competitor's page"""
     unique_features = []
     
-    # Extract features from content
-    content = result.get('content', '')
+    # First, check if we have AI-extracted facts available
+    if 'unique_facts' in result and result['unique_facts']:
+        # Use the AI-extracted facts as features
+        for fact_item in result['unique_facts']:
+            if isinstance(fact_item, dict) and 'fact' in fact_item:
+                unique_features.append(fact_item['fact'])
+        
+        # If we have enough facts, return them
+        if len(unique_features) >= 3:
+            return unique_features[:5]  # Return up to 5 unique facts
+    
+    # Fallback: Extract features from content
+    content = result.get('content', {}).get('sample', '') or result.get('main_content', '') or result.get('description', '')
     if content:
         # Look for product features, benefits, unique selling points
         feature_patterns = [
@@ -65,13 +80,17 @@ def extract_unique_features(result):
             r'benefit[s]?[\s\:]+(.*?)(?=\.|$)',
             r'advantage[s]?[\s\:]+(.*?)(?=\.|$)',
             r'unique[\s\:]+(.*?)(?=\.|$)',
-            r'patent[ed]?[\s\:]+(.*?)(?=\.|$)'
+            r'patent[ed]?[\s\:]+(.*?)(?=\.|$)',
+            r'research shows[\s\:]+(.*?)(?=\.|$)',
+            r'according to[\s\:]+(.*?)(?=\.|$)',
+            r'study found[\s\:]+(.*?)(?=\.|$)',
+            r'experts recommend[\s\:]+(.*?)(?=\.|$)'
         ]
         
         for pattern in feature_patterns:
             matches = re.findall(pattern, content, re.IGNORECASE)
             for match in matches[:3]:  # Limit to 3 matches per pattern
-                if len(match) > 10 and len(match) < 100:  # Reasonable length
+                if len(match) > 10 and len(match) < 150:  # Reasonable length
                     unique_features.append(match.strip())
     
     return unique_features[:5]  # Return up to 5 unique features
@@ -137,6 +156,31 @@ def generate_blog_variables(seo_insights):
     
     # Determine industry and context
     industry = detect_industry(query)
+    current_year = datetime.now().year
+    
+    # Extract all unique features/facts from competitors
+    all_unique_features = []
+    for comp in competitors:
+        if 'unique_features' in comp and comp['unique_features']:
+            all_unique_features.extend(comp['unique_features'])
+    
+    # Collect facts from all_unique_facts if available
+    if 'all_unique_facts' in seo_insights and seo_insights['all_unique_facts']:
+        for fact in seo_insights['all_unique_facts']:
+            if isinstance(fact, dict) and 'fact' in fact:
+                all_unique_features.append(fact['fact'])
+    
+    # Deduplicate features
+    unique_features = []
+    for feature in all_unique_features:
+        is_duplicate = False
+        for unique_feature in unique_features:
+            # Simple string similarity check
+            if similarity_score(feature, unique_feature) > 0.7:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_features.append(feature)
     
     # Create variables dictionary
     variables = {
@@ -146,6 +190,7 @@ def generate_blog_variables(seo_insights):
         'URL_FRIENDLY_SINGULAR_KEYWORD': keywords['singular'].replace(' ', '-').lower(),
         'CURRENT_DATE': datetime.now().strftime('%B %d, %Y'),
         'ISO_DATE': datetime.now().strftime('%Y-%m-%d'),
+        'CURRENT_YEAR': str(current_year),
         'INDUSTRY': industry,
         'INDUSTRY_CONTEXT': f"fast-paced {industry} world",
         'HERO_IMAGE_URL': f"https://example.com/images/{query.replace(' ', '-')}-hero.jpg",
@@ -160,7 +205,18 @@ def generate_blog_variables(seo_insights):
         'CURRENCY': "USD",
         'RATING': "4.8",
         'REVIEW_COUNT': "1247",
-        'EXPERIENCE': "15"
+        'EXPERIENCE': "15",
+        'DEFINITION': f"the process of optimizing {keywords['singular']} to achieve better results and performance",
+        'RELATED_TERM': f"{keywords['singular']} optimization",
+        'RELATED_ASPECT': "performance enhancement",
+        'METRIC_1': "conversion rate",
+        'METRIC_2': "engagement metrics",
+        'TOOL_1': f"{industry} Analytics Pro",
+        'TOOL_2': f"{keywords['singular'].title()} Optimizer",
+        'TOOL_3': f"Advanced {industry} Suite",
+        'TECHNOLOGY_1': "artificial intelligence",
+        'TREND_1': "personalization",
+        'TREND_2': "automated optimization"
     }
     
     # Extract competitor-specific information
@@ -213,25 +269,41 @@ def generate_blog_variables(seo_insights):
     
     return variables
 
+def similarity_score(str1, str2):
+    """Calculate a simple similarity score between two strings"""
+    # Convert to lowercase and split into words
+    words1 = set(str1.lower().split())
+    words2 = set(str2.lower().split())
+    
+    # Calculate Jaccard similarity
+    intersection = len(words1.intersection(words2))
+    union = len(words1.union(words2))
+    
+    return intersection / union if union > 0 else 0
+
 def detect_industry(query):
     """Detect the industry based on the query"""
-    tech_keywords = ['phone', 'smartphone', 'tablet', 'laptop', 'computer', 'tech', 'digital']
-    home_keywords = ['home', 'kitchen', 'furniture', 'decor', 'house', 'garden']
-    fashion_keywords = ['fashion', 'clothing', 'apparel', 'shoes', 'accessories', 'wear']
+    industry_keywords = {
+        'tech': ['software', 'app', 'technology', 'digital', 'computer', 'laptop', 'smartphone', 'gadget'],
+        'fashion': ['clothing', 'fashion', 'apparel', 'shoes', 'accessories', 'jewelry', 'watch'],
+        'health': ['health', 'fitness', 'workout', 'exercise', 'diet', 'nutrition', 'wellness'],
+        'home': ['home', 'furniture', 'decor', 'kitchen', 'bedroom', 'bathroom', 'garden'],
+        'beauty': ['beauty', 'skincare', 'makeup', 'cosmetics', 'hair', 'fragrance'],
+        'food': ['food', 'recipe', 'cooking', 'baking', 'meal', 'restaurant', 'dining'],
+        'travel': ['travel', 'vacation', 'hotel', 'flight', 'destination', 'tourism', 'resort'],
+        'finance': ['finance', 'money', 'investment', 'banking', 'credit', 'loan', 'insurance'],
+        'education': ['education', 'learning', 'course', 'school', 'college', 'university', 'training'],
+        'automotive': ['car', 'vehicle', 'automotive', 'truck', 'suv', 'motorcycle', 'auto']
+    }
     
-    for keyword in tech_keywords:
-        if keyword in query.lower():
-            return "technology"
+    query_terms = query.lower().split()
     
-    for keyword in home_keywords:
-        if keyword in query.lower():
-            return "home improvement"
+    for industry, keywords in industry_keywords.items():
+        for term in query_terms:
+            if term in keywords or any(term in keyword for keyword in keywords):
+                return industry
     
-    for keyword in fashion_keywords:
-        if keyword in query.lower():
-            return "fashion"
-    
-    return "consumer products"
+    return "digital"  # Default industry
 
 def generate_use_cases(query):
     """Generate use cases based on the query"""
@@ -393,29 +465,225 @@ def generate_contexts(query):
     
     return contexts
 
-def fill_template(template_file, variables):
-    """Fill in the template with variables"""
-    with open(template_file, 'r', encoding='utf-8') as f:
-        template = f.read()
+def fill_placeholders_with_gemini(template_content, variables, query):
+    """Use Gemini 2.5 Flash Preview to fill in any remaining placeholders in the template"""
+    # Find all remaining placeholders
+    remaining_placeholders = re.findall(r'\{\{([A-Z0-9_]+)\}\}', template_content)
     
-    # Replace all variables in the template
-    for key, value in variables.items():
-        placeholder = '{{' + key + '}}'
-        if placeholder in template:
-            template = template.replace(placeholder, str(value))
+    if not remaining_placeholders:
+        return template_content
     
-    # Find any remaining placeholders
-    remaining_placeholders = re.findall(r'\{\{([A-Z0-9_]+)\}\}', template)
+    print(f"Found {len(remaining_placeholders)} placeholders to fill with Gemini AI")
     
-    if remaining_placeholders:
-        print(f"Warning: Found {len(remaining_placeholders)} placeholders without values. Generating content for them.")
+    # Group similar placeholders
+    placeholder_groups = {}
+    for placeholder in remaining_placeholders:
+        # Extract the base name without numbers
+        base_name = re.sub(r'_\d+$', '', placeholder)
+        if base_name not in placeholder_groups:
+            placeholder_groups[base_name] = []
+        placeholder_groups[base_name].append(placeholder)
+    
+    # For each group, create a batch request to Gemini
+    for base_name, placeholders in placeholder_groups.items():
+        # Create a prompt for this group of placeholders
+        prompt = f"""You are an expert SEO content writer creating a blog post about '{query}'.
+        Generate content for the following placeholders in a blog template:
         
-        # Generate appropriate content for each remaining placeholder
+        {', '.join(placeholders)}
+        
+        Based on the naming pattern, these placeholders seem to be about: {base_name}
+        
+        For each placeholder, provide content that is:
+        1. Specific and relevant to '{query}'
+        2. Demonstrates expertise (E-E-A-T)
+        3. Is factually accurate
+        4. Has a natural, human-like writing style
+        5. Is appropriate length for a blog section (1-3 sentences for most items)
+        
+        Return your response as a JSON object with the placeholder names as keys and the content as values.
+        """
+        
+        try:
+            # Call Gemini API
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            data = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "topK": 40,
+                    "topP": 0.95,
+                    "maxOutputTokens": 1024,
+                }
+            }
+            
+            if GEMINI_API_KEY:
+                url = GEMINI_FLASH_API_URL
+                if "?key=" not in url:
+                    url = f"{url}?key={GEMINI_API_KEY}"
+            else:
+                print("No Gemini API key found, using fallback placeholder generation")
+                # Use fallback for this group
+                for placeholder in placeholders:
+                    replacement = generate_placeholder_content(placeholder)
+                    template_content = template_content.replace('{{' + placeholder + '}}', replacement)
+                continue
+                
+            response = requests.post(url, headers=headers, json=data)
+            
+            if response.status_code != 200:
+                print(f"Error calling Gemini API: {response.status_code} - {response.text}")
+                # Use fallback for this group
+                for placeholder in placeholders:
+                    replacement = generate_placeholder_content(placeholder)
+                    template_content = template_content.replace('{{' + placeholder + '}}', replacement)
+                continue
+                
+            response_json = response.json()
+            
+            # Extract the generated text
+            if 'candidates' in response_json and len(response_json['candidates']) > 0:
+                generated_text = response_json['candidates'][0]['content']['parts'][0]['text']
+                
+                # Try to extract JSON from the response
+                try:
+                    # Find JSON object in the response
+                    json_match = re.search(r'\{.*\}', generated_text, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        placeholder_values = json.loads(json_str)
+                        
+                        # Replace placeholders with their values
+                        for placeholder, value in placeholder_values.items():
+                            template_content = template_content.replace('{{' + placeholder + '}}', str(value))
+                    else:
+                        print(f"Could not find JSON in Gemini response for {base_name} placeholders")
+                        # Use fallback for this group
+                        for placeholder in placeholders:
+                            replacement = generate_placeholder_content(placeholder)
+                            template_content = template_content.replace('{{' + placeholder + '}}', replacement)
+                except json.JSONDecodeError:
+                    print(f"Could not parse JSON from Gemini response for {base_name} placeholders")
+                    # Use fallback for this group
+                    for placeholder in placeholders:
+                        replacement = generate_placeholder_content(placeholder)
+                        template_content = template_content.replace('{{' + placeholder + '}}', replacement)
+            else:
+                print(f"Unexpected response format from Gemini API for {base_name} placeholders")
+                # Use fallback for this group
+                for placeholder in placeholders:
+                    replacement = generate_placeholder_content(placeholder)
+                    template_content = template_content.replace('{{' + placeholder + '}}', replacement)
+        except Exception as e:
+            print(f"Error generating content with Gemini: {str(e)}")
+            # Use fallback for this group
+            for placeholder in placeholders:
+                replacement = generate_placeholder_content(placeholder)
+                template_content = template_content.replace('{{' + placeholder + '}}', replacement)
+    
+    # Check if there are still any remaining placeholders
+    remaining_placeholders = re.findall(r'\{\{([A-Z0-9_]+)\}\}', template_content)
+    if remaining_placeholders:
+        print(f"Still found {len(remaining_placeholders)} placeholders after Gemini processing. Using fallback.")
+        # Use fallback for any that weren't filled
         for placeholder in remaining_placeholders:
             replacement = generate_placeholder_content(placeholder)
-            template = template.replace('{{' + placeholder + '}}', replacement)
+            template_content = template_content.replace('{{' + placeholder + '}}', replacement)
     
-    return template
+    return template_content
+
+def fill_template(template_path, variables, ai_resistant=False):
+    """Fill in the template with the generated variables"""
+    try:
+        with open(template_path, 'r', encoding='utf-8') as f:
+            template_content = f.read()
+        
+        # Replace all variables in the template
+        for var_name, var_value in variables.items():
+            placeholder = '{{' + var_name + '}}'
+            template_content = template_content.replace(placeholder, str(var_value))
+        
+        # Use Gemini to fill in any remaining placeholders
+        query = variables.get('PRIMARY_KEYWORD', '')
+        template_content = fill_placeholders_with_gemini(template_content, variables, query)
+        
+        # If AI-resistant mode is enabled, apply techniques to make the content less detectable by AI
+        if ai_resistant:
+            template_content = make_ai_resistant(template_content)
+        
+        return template_content
+    except Exception as e:
+        print(f"Error filling template: {str(e)}")
+        return ""
+
+def make_ai_resistant(content):
+    """Apply techniques to make content less detectable by AI detection systems"""
+    import random
+    import re
+    
+    # 1. Add slight variations in punctuation and spacing
+    punctuation_variations = {
+        '.': ['.', '. ', '.  '],
+        ',': [',', ', ', ',  '],
+        '!': ['!', '! ', '!  '],
+        '?': ['?', '? ', '?  ']
+    }
+    
+    for punct, variations in punctuation_variations.items():
+        pattern = f'\\{punct}'
+        matches = list(re.finditer(pattern, content))
+        # Only modify a percentage of matches to maintain readability
+        if matches:
+            for match in random.sample(matches, min(len(matches) // 3, len(matches))):
+                pos = match.start()
+                replacement = random.choice(variations)
+                content = content[:pos] + replacement + content[pos+1:]
+    
+    # 2. Introduce occasional typos and correct them with HTML
+    paragraphs = content.split('\n\n')
+    modified_paragraphs = []
+    
+    for paragraph in paragraphs:
+        if len(paragraph) > 100 and random.random() < 0.2:  # 20% chance for longer paragraphs
+            words = paragraph.split(' ')
+            if len(words) > 10:
+                # Select a random word to "typo and correct"
+                idx = random.randint(5, len(words) - 5)
+                word = words[idx]
+                if len(word) > 4:
+                    # Create a simple typo by swapping two adjacent letters
+                    pos = random.randint(1, len(word) - 2)
+                    typo_word = word[:pos] + word[pos+1] + word[pos] + word[pos+2:]
+                    # Replace the word with the typo and correction
+                    words[idx] = f"<span title='{typo_word}'>{word}</span>"
+            paragraph = ' '.join(words)
+        modified_paragraphs.append(paragraph)
+    
+    content = '\n\n'.join(modified_paragraphs)
+    
+    # 3. Add invisible zero-width characters at random positions
+    zero_width_chars = ['\u200B', '\u200C', '\u200D']
+    content_chars = list(content)
+    
+    # Insert zero-width characters at random positions (about 1 per 100 characters)
+    for i in range(len(content) // 100):
+        pos = random.randint(0, len(content_chars) - 1)
+        # Avoid inserting in the middle of HTML tags or markdown formatting
+        if content_chars[pos].isalnum():
+            content_chars.insert(pos, random.choice(zero_width_chars))
+    
+    content = ''.join(content_chars)
+    
+    return content
 
 def generate_placeholder_content(placeholder):
     """Generate appropriate content for a placeholder based on its name"""
@@ -485,18 +753,120 @@ def generate_placeholder_content(placeholder):
         # Generic replacement for any other placeholder types
         return f"high-quality option"
 
-def save_blog_post(content, output_file):
+def convert_markdown_to_html(markdown_content):
+    """Convert markdown content to HTML"""
+    # Use the markdown library to convert to HTML
+    html_content = markdown.markdown(markdown_content, extensions=['extra', 'codehilite'])
+    
+    # Wrap in a nice HTML template with styling
+    html_template = f'''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>SEO Optimized Blog</title>
+        <style>
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+            }}
+            h1, h2, h3, h4, h5, h6 {{
+                color: #2c3e50;
+                margin-top: 1.5em;
+            }}
+            h1 {{
+                font-size: 2.2em;
+                border-bottom: 1px solid #eaecef;
+                padding-bottom: 0.3em;
+            }}
+            h2 {{
+                font-size: 1.8em;
+                border-bottom: 1px solid #eaecef;
+                padding-bottom: 0.3em;
+            }}
+            p {{
+                margin: 1em 0;
+            }}
+            a {{
+                color: #3498db;
+                text-decoration: none;
+            }}
+            a:hover {{
+                text-decoration: underline;
+            }}
+            code {{
+                background-color: #f8f8f8;
+                padding: 0.2em 0.4em;
+                border-radius: 3px;
+                font-family: Consolas, Monaco, 'Andale Mono', monospace;
+                font-size: 0.9em;
+            }}
+            blockquote {{
+                border-left: 4px solid #dfe2e5;
+                padding: 0 1em;
+                color: #6a737d;
+                margin: 0;
+            }}
+            img {{
+                max-width: 100%;
+                height: auto;
+            }}
+            table {{
+                border-collapse: collapse;
+                width: 100%;
+                margin: 1em 0;
+            }}
+            table, th, td {{
+                border: 1px solid #dfe2e5;
+            }}
+            th, td {{
+                padding: 8px 16px;
+                text-align: left;
+            }}
+            th {{
+                background-color: #f6f8fa;
+            }}
+        </style>
+    </head>
+    <body>
+        {html_content}
+    </body>
+    </html>
+    '''
+    
+    return html_template
+
+def save_blog_post(content, output_file, save_html=True):
     """Save the generated blog post to a file"""
+    # Save markdown version
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(content)
     print(f"Blog post saved to {output_file}")
+    
+    # Also save as HTML if requested
+    if save_html:
+        html_output_file = os.path.splitext(output_file)[0] + '.html'
+        html_content = convert_markdown_to_html(content)
+        with open(html_output_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        print(f"HTML version saved to {html_output_file}")
+        
+        return html_output_file
+    
+    return None
 
 def main(args=None):
     if args is None:
         parser = argparse.ArgumentParser(description='Generate SEO-optimized blog posts from SEO analysis')
         parser.add_argument('input_file', help='Path to the JSON file containing SEO analysis')
-        parser.add_argument('--template', default='dynamic_blog_template.md', help='Path to the blog template file')
+        parser.add_argument('--template', default='advanced_blog_template.md', help='Path to the blog template file')
         parser.add_argument('--output', help='Path to save the generated blog post (default: blog_[query].md)')
+        parser.add_argument('--ai-resistant', action='store_true', help='Generate content that is resistant to AI detection')
         args = parser.parse_args()
     
     # Handle both command line args and direct function calls
@@ -504,17 +874,21 @@ def main(args=None):
     
     if isinstance(args, list):
         # Parse command line style arguments from list
-        template = 'dynamic_blog_template.md'
+        template = 'advanced_blog_template.md'
         output = None
+        ai_resistant = False
         
         for i, arg in enumerate(args):
             if arg == '--template' and i+1 < len(args):
                 template = args[i+1]
             elif arg == '--output' and i+1 < len(args):
                 output = args[i+1]
+            elif arg == '--ai-resistant':
+                ai_resistant = True
     else:
         template = args.template
         output = args.output
+        ai_resistant = args.ai_resistant if hasattr(args, 'ai_resistant') else False
     
     # Load SEO analysis
     seo_data = load_seo_analysis(input_file)
@@ -525,8 +899,8 @@ def main(args=None):
     # Generate variables for the template
     variables = generate_blog_variables(seo_insights)
     
-    # Fill in the template
-    blog_content = fill_template(template, variables)
+    # Fill in the template with AI resistance if requested
+    blog_content = fill_template(template, variables, ai_resistant)
     
     # Save the blog post
     if output:
@@ -535,7 +909,8 @@ def main(args=None):
         query = seo_insights['query'].replace(' ', '_').lower()
         output_file = f"blog_{query}.md"
     
-    save_blog_post(blog_content, output_file)
+    # Save both markdown and HTML versions
+    html_output_file = save_blog_post(blog_content, output_file, save_html=True)
     
     print(f"Successfully generated blog post for '{seo_insights['query']}'")
     print(f"Target metrics to outrank competitors:")
@@ -543,14 +918,31 @@ def main(args=None):
     print(f"- Internal links: {variables['TARGET_INTERNAL_LINKS']}")
     print(f"- External links: {variables['TARGET_EXTERNAL_LINKS']}")
     print(f"- Images: {variables['TARGET_IMAGES']}")
+    
+    if ai_resistant:
+        print("\nAI-RESISTANT MODE: Content has been enhanced to resist AI detection.")
+        print("- Added subtle text variations")
+        print("- Incorporated zero-width characters")
+        print("- Included occasional HTML-corrected 'typos'")
+    
     print("\nNOTE: All placeholders have been replaced with appropriate content.")
     print("The blog is now complete and ready for publication with no template elements remaining.")
-    print("If you need to customize specific sections, edit the generated markdown file directly.")
+    print("The content is available in both Markdown and HTML formats.")
+    print(f"- Markdown: {output_file}")
+    print(f"- HTML: {html_output_file}")
+    
+    # Print information about the unique facts used
+    if 'all_unique_facts' in seo_insights and seo_insights['all_unique_facts']:
+        print(f"\nIncorporated {len(seo_insights['all_unique_facts'])} unique facts from source content for E-E-A-T signals.")
+    elif any('unique_facts' in result for result in seo_insights.get('competitors', [])):
+        fact_count = sum(len(result.get('unique_facts', [])) for result in seo_insights.get('competitors', []))
+        print(f"\nIncorporated {fact_count} unique facts from competitor content for E-E-A-T signals.")
 
     
     return {
         'query': seo_insights['query'],
         'output_file': output_file,
+        'html_output_file': html_output_file,
         'metrics': {
             'word_count': variables['TARGET_WORD_COUNT'],
             'internal_links': variables['TARGET_INTERNAL_LINKS'],

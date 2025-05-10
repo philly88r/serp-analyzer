@@ -329,7 +329,7 @@ def analyze(query):
         seo_analyzer.clean_all_directories()
         
         # Run SEO analysis
-        seo_analyzer.main([serp_file])
+        seo_analyzer.main(['--input', serp_file])
         
         flash(f'Successfully created SEO analysis for "{query}"', 'success')
         return redirect(url_for('index'))
@@ -352,12 +352,30 @@ def generate_blog(query):
     try:
         # Generate blog post
         output_file = os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}.md')
-        generate_seo_blog.main([serp_file, '--output', output_file])
         
-        # Convert to HTML
-        html_file = md_to_html.convert_md_to_html(output_file, app.config['HTML_REPORTS_FOLDER'])
+        # Use the new generate_seo_blog.main function that returns both MD and HTML files
+        result = generate_seo_blog.main([serp_file, '--output', output_file])
         
-        flash(f'Successfully generated blog post for "{query}"', 'success')
+        # The HTML file is now generated automatically by generate_seo_blog.py
+        if 'html_output_file' in result and result['html_output_file']:
+            # Copy the HTML file to the HTML_REPORTS_FOLDER if it's not already there
+            html_basename = os.path.basename(result['html_output_file'])
+            html_destination = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_basename)
+            
+            if result['html_output_file'] != html_destination:
+                with open(result['html_output_file'], 'r', encoding='utf-8') as src_file:
+                    html_content = src_file.read()
+                
+                with open(html_destination, 'w', encoding='utf-8') as dest_file:
+                    dest_file.write(html_content)
+                
+                print(f"Copied HTML file to {html_destination}")
+        else:
+            # Fallback to the old method if for some reason the HTML file wasn't generated
+            html_file = md_to_html.convert_md_to_html(output_file, app.config['HTML_REPORTS_FOLDER'])
+            print(f"Used fallback HTML generation: {html_file}")
+        
+        flash(f'Successfully generated blog post for "{query}" with automatic HTML output', 'success')
         return redirect(url_for('view_blog', query=query))
     
     except Exception as e:

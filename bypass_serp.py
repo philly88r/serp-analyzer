@@ -326,6 +326,25 @@ class BypassSerpAnalyzer:
 
                         # Get the HTML content
                         html_content = await response.text()
+                        
+                        # Save the raw HTML content to a file for later AI analysis
+                        try:
+                            # Create a directory to store HTML content if it doesn't exist
+                            html_dir = os.path.join("data", "html_content")
+                            os.makedirs(html_dir, exist_ok=True)
+                            
+                            # Create a safe filename from the URL
+                            safe_filename = re.sub(r'[^\w]', '_', url)
+                            safe_filename = safe_filename[-100:] if len(safe_filename) > 100 else safe_filename
+                            html_file_path = os.path.join(html_dir, f"{safe_filename}.html")
+                            
+                            # Save the HTML content
+                            with open(html_file_path, "w", encoding="utf-8") as f:
+                                f.write(html_content)
+                            logger.info(f"Saved HTML content to {html_file_path}")
+                        except Exception as e:
+                            logger.error(f"Error saving HTML content: {str(e)}")
+                        
                         soup = BeautifulSoup(html_content, "html.parser")
                     
                         title = soup.title.string.strip() if soup.title else ""
@@ -339,6 +358,9 @@ class BypassSerpAnalyzer:
                         h2_tags = [h2.get_text(strip=True) for h2 in soup.find_all('h2')]
                         h3_tags = [h3.get_text(strip=True) for h3 in soup.find_all('h3')]
 
+                        # Extract main content text for fact extraction
+                        main_content = self._extract_main_content(soup)
+                        
                         links_data = []
                         page_domain = urlparse(url).netloc
                         for link in soup.find_all('a', href=True):
@@ -424,7 +446,8 @@ class BypassSerpAnalyzer:
                             },
                             "content": {
                                 "word_count": word_count,
-                                "sample": content_sample
+                                "sample": content_sample,
+                                "main_content": main_content
                             },
                             "schema_markup": schema_markup,
                             "technical": technical_data,
@@ -1608,41 +1631,97 @@ class BypassSerpAnalyzer:
             traceback.print_exc()
             return {"query": query, "results": []}
     
-    def _save_results(self, serp_analysis):
-        """Save search results to JSON and CSV files."""
+    def _extract_main_content(self, soup):
+        """
+        Extract the main content from a BeautifulSoup object, filtering out navigation, headers, footers, etc.
+        
+        Args:
+            soup: BeautifulSoup object of the page
+            
+        Returns:
+            str: The main content text of the page
+        """
         try:
-            # Generate timestamp and safe query string
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            query = serp_analysis["query"]
-            safe_query = query.replace(' ', '_')
+            # Try to find main content containers
+            main_content_tags = [
+                "main", "article", "#content", ".content", "#main", ".main", 
+                "#post", ".post", "#entry", ".entry", "[role='main']", ".entry-content",
+                ".post-content", ".article-content", ".page-content"
+            ]
             
-            # Save JSON results
-            json_file = f"results/serp_{safe_query}_{timestamp}.json"
-            with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(serp_analysis, f, indent=2, ensure_ascii=False)
-            logger.info(f"Saved JSON results to {json_file}")
+            # Try each potential content container
+            for tag in main_content_tags:
+                content_element = soup.select_one(tag)
+                if content_element and len(content_element.get_text(strip=True)) > 200:
+                    # Found a substantial content element
+                    return content_element.get_text(" ", strip=True)
             
-            # Save CSV results
-            csv_file = f"results/serp_{safe_query}_{timestamp}.csv"
-            with open(csv_file, "w", encoding="utf-8") as f:
+            # If no main content container found, try to extract content by removing common non-content elements
+            # Remove navigation, header, footer, sidebar, ads, etc.
+            for element in soup.select('nav, header, footer, aside, .sidebar, .nav, .menu, .advertisement, .ad, script, style'):
+                element.decompose()
+            
+            # Get the body text if available, otherwise use the whole document
+            body = soup.body if soup.body else soup
+            
+            # Extract paragraphs and headings which are likely to be main content
+            content_elements = body.select('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, table')
+            
+            if content_elements:
+                # Join the text from all content elements
+                return " ".join(element.get_text(" ", strip=True) for element in content_elements)
+            else:
+                # Fallback to all text in the body
+                return body.get_text(" ", strip=True)
+                
+        except Exception as e:
+            logger.error(f"Error extracting main content: {str(e)}")
+            # Return empty string on error
+            return ""
+    
+    def _save_results(self, serp_analysis):
+        """
+        Save the results to files.
+        """
+        # Create a sanitized filename from the query
+        query = serp_analysis.get('query', 'unknown')
+        sanitized_query = re.sub(r'\W+', '_', query)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save to JSON
+        json_filename = f"serp_{sanitized_query}.json"
+        json_path = os.path.join("results", json_filename)
+        
+        try:
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(serp_analysis, f, indent=4, ensure_ascii=False)
+            logger.info(f"Saved results to {json_path}")
+        except Exception as e:
+            logger.error(f"Error saving results to JSON: {str(e)}")
+        
+        # Save to CSV
+        csv_filename = f"serp_{sanitized_query}.csv"
+        csv_path = os.path.join("results", csv_filename)
+        
+        try:
+            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
                 # Write header
-                f.write("position,title,url,description,query\n")
+                writer.writerow(['Position', 'Title', 'URL', 'Description'])
                 
                 # Write data
-                for result in serp_analysis["results"]:
-                    position = result.get("position", "")
-                    title = result.get("title", "").replace('"', '""')
-                    url = result.get("url", "")
-                    description = result.get("description", "").replace('"', '""')
-                    result_query = result.get("query", "").replace('"', '""')
-                    
-                    f.write(f'"{position}","{title}","{url}","{description}","{result_query}"\n')
+                for i, result in enumerate(serp_analysis.get('results', [])):
+                    writer.writerow([
+                        i + 1,
+                        result.get('title', ''),
+                        result.get('url', ''),
+                        result.get('description', '')
+                    ])
             
-            logger.info(f"Saved CSV results to {csv_file}")
-            
+            logger.info(f"Saved results to {csv_path}")
         except Exception as e:
-            logger.error(f"Error saving results: {str(e)}")
-
+            logger.error(f"Error saving results to CSV: {str(e)}")
 # For testing
 async def test_bypass_analyzer():
     """Test the bypass SERP analyzer with a sample query."""

@@ -4,6 +4,7 @@ import argparse
 import os
 from datetime import datetime
 from api_config import GEMINI_API_KEY, GEMINI_API_URL
+from fact_extractor import extract_facts_from_serp_data
 
 def analyze_seo_with_gemini(serp_data):
     """
@@ -181,31 +182,75 @@ def create_seo_comparative_analysis(serp_data):
     # Using API key from api_config
     API_URL = GEMINI_API_URL
     
-    print("Creating comparative SEO analysis...")
+    query = serp_data.get('query', '')
+    results = serp_data.get('results', [])
     
-    # Extract key SEO data from each result
-    results_data = []
-    for i, result in enumerate(serp_data['results']):
-        result_data = {
+    print(f"Creating comparative SEO analysis for query: {query}")
+    
+    # Extract keywords from the query for analysis
+    query_keywords = [kw.strip().lower() for kw in query.split()]
+    
+    # Create a summary of all results with keyword metrics
+    results_summary = []
+    for i, result in enumerate(results[:10]):
+        # Calculate keyword usage metrics
+        title_text = result.get('title', '').lower()
+        description_text = result.get('description', '').lower()
+        main_content = result.get('main_content', '').lower()
+        
+        # Count keyword occurrences
+        keyword_counts = {}
+        keyword_density = {}
+        
+        for keyword in query_keywords:
+            # Count in title
+            title_count = title_text.count(keyword)
+            
+            # Count in description
+            description_count = description_text.count(keyword)
+            
+            # Count in main content
+            content_count = main_content.count(keyword) if main_content else 0
+            
+            # Total count
+            total_count = title_count + description_count + content_count
+            
+            # Calculate density (percentage of total words)
+            word_count = result.get('word_count', 0)
+            density = (total_count / word_count * 100) if word_count > 0 else 0
+            
+            keyword_counts[keyword] = {
+                'title': title_count,
+                'description': description_count,
+                'content': content_count,
+                'total': total_count
+            }
+            
+            keyword_density[keyword] = round(density, 2)
+        
+        result_summary = {
             "position": i + 1,
             "title": result.get('title', ''),
             "url": result.get('url', ''),
-            "meta_description": result.get('meta_description', ''),
             "word_count": result.get('word_count', 0),
             "internal_links_count": result.get('internal_links_count', 0),
             "external_links_count": result.get('external_links_count', 0),
             "images_count": result.get('images_count', 0),
-            "h1_count": len(result.get('h1_tags', [])),
-            "h2_count": len(result.get('h2_tags', [])),
-            "h3_count": len(result.get('h3_tags', []))
+            "h1_count": result.get('h1_count', 0),
+            "h2_count": result.get('h2_count', 0),
+            "h3_count": result.get('h3_count', 0),
+            "schema_count": result.get('schema_count', 0),
+            "keyword_counts": keyword_counts,
+            "keyword_density": keyword_density,
+            "unique_facts_count": len(result.get('unique_facts', []))
         }
-        results_data.append(result_data)
+        results_summary.append(result_summary)
     
     # Prepare the prompt for Gemini
     prompt = f"""
-You are an expert SEO analyst. Create a detailed comparative SEO analysis of the following top search results for the query "{serp_data['query']}".
+You are an expert SEO analyst. Analyze the following search results and provide a detailed comparative analysis with actionable recommendations for outranking these competitors.
 
-{json.dumps(results_data, indent=2)}
+{json.dumps(results_summary, indent=2)}
 
 Provide a comprehensive comparative SEO analysis covering:
 
@@ -421,18 +466,23 @@ def main():
         sanitized_query = ''.join(c if c.isalnum() or c == '_' else '_' for c in query)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
+        # Extract unique facts from each result's content
+        print("Extracting unique facts from search results...")
+        serp_data_with_facts = extract_facts_from_serp_data(serp_data)
+        
         # Analyze companies if query contains company-related keywords
         is_company_query = any(keyword in query.lower() for keyword in ['company', 'business', 'corporation', 'inc', 'llc', 'enterprise'])
         
         if is_company_query:
             print("Detected company-related query. Performing company analysis...")
-            serp_data_with_analysis = analyze_companies_with_gemini(serp_data)
+            serp_data_with_analysis = analyze_companies_with_gemini(serp_data_with_facts)
         else:
             # Perform SEO analysis
             print("Performing SEO analysis...")
-            serp_data_with_analysis = analyze_seo_with_gemini(serp_data)
+            serp_data_with_analysis = analyze_seo_with_gemini(serp_data_with_facts)
         
-        # Create comparative SEO analysis
+        # Create comparative SEO analysis with keyword usage metrics
+        print("Creating comparative SEO analysis with keyword metrics...")
         comparative_seo_analysis = create_seo_comparative_analysis(serp_data_with_analysis)
         
         # Save the complete analysis to a JSON file
