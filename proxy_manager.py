@@ -42,7 +42,16 @@ class ProxyManager:
             logger.info("Setting proxy configuration for Render environment")
             render_proxy = os.environ.get('ROTATING_PROXY_ENDPOINT')
             if render_proxy:
-                self.rotating_proxy_endpoint = render_proxy
+                # Ensure the proxy URL from env var has the socks5h:// prefix if it's the Oxylabs proxy
+                if 'oxylabs.io' in render_proxy and not render_proxy.startswith('socks5h://'):
+                    # If it has another protocol, remove it
+                    if '://' in render_proxy:
+                        render_proxy = render_proxy.split('://', 1)[1]
+                    # Add socks5h:// prefix
+                    self.rotating_proxy_endpoint = f"socks5h://{render_proxy}"
+                    logger.info("Converted Oxylabs proxy to use SOCKS5h protocol")
+                else:
+                    self.rotating_proxy_endpoint = render_proxy
                 logger.info("Using proxy from ROTATING_PROXY_ENDPOINT environment variable on Render")
             else:
                 # Fallback to hardcoded proxy if environment variable not set
@@ -116,6 +125,14 @@ class ProxyManager:
             protocol = proxy_url.split('://')[0] if '://' in proxy_url else 'unknown'
             domain = proxy_url.split('@')[-1] if '@' in proxy_url else proxy_url.split('://')[-1]
             logger.info(f"Using proxy on Render: {protocol}://*****@{domain}")
+            
+            # Add extra logging for SOCKS5 proxies
+            if protocol in ['socks5', 'socks5h']:
+                logger.info(f"SOCKS5 proxy detected. Using {protocol} protocol for better anonymity and CAPTCHA avoidance.")
+                if protocol == 'socks5h':
+                    logger.info("Using socks5h which resolves hostnames through the proxy for enhanced privacy.")
+            elif protocol == 'http':
+                logger.warning("Using HTTP proxy. Consider switching to SOCKS5h for better CAPTCHA avoidance.")
             
         return proxy_url
     
