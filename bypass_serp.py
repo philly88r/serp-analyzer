@@ -1066,7 +1066,7 @@ class BypassSerpAnalyzer:
 
     async def _solve_captcha(self, page):
         """
-        Attempt to solve a CAPTCHA on the page using OCR.
+        Attempt to solve a CAPTCHA on the page.
         
         Args:
             page: The Playwright page object
@@ -1075,16 +1075,58 @@ class BypassSerpAnalyzer:
             bool: True if CAPTCHA was solved, False otherwise
         """
         try:
-            logger.info("Attempting to solve CAPTCHA using OCR")
+            logger.info("Attempting to solve CAPTCHA")
             
-            # First, try to find the image CAPTCHA
+            # First, try to find and click the reCAPTCHA checkbox (the simple version)
+            recaptcha_checkbox_selectors = [
+                "#recaptcha-anchor",  # Standard reCAPTCHA checkbox
+                ".recaptcha-checkbox",  # Another common class
+                "iframe[src*='recaptcha']",  # reCAPTCHA iframe
+                "div.g-recaptcha",  # reCAPTCHA container
+                "input[type='checkbox'][name*='captcha']",  # Generic captcha checkbox
+                "#captcha-form input[type='checkbox']",  # Checkbox within captcha form
+            ]
+            
+            # Check if there's a reCAPTCHA iframe and switch to it if needed
+            recaptcha_iframe = await page.query_selector("iframe[src*='recaptcha']")
+            if recaptcha_iframe:
+                logger.info("Found reCAPTCHA iframe, switching to it")
+                frame = await recaptcha_iframe.content_frame()
+                if frame:
+                    # Look for the checkbox within the iframe
+                    checkbox = await frame.query_selector("#recaptcha-anchor")
+                    if checkbox:
+                        logger.info("Found reCAPTCHA checkbox in iframe, clicking it")
+                        await checkbox.click()
+                        # Wait for the checkbox to be checked
+                        try:
+                            await frame.wait_for_selector("#recaptcha-anchor[aria-checked='true']", timeout=5000)
+                            logger.info("Successfully clicked reCAPTCHA checkbox")
+                            # Wait a moment for any verification to complete
+                            await page.wait_for_timeout(2000)
+                            return True
+                        except Exception as e:
+                            logger.warning(f"Checkbox clicked but verification failed: {str(e)}")
+            
+            # If no iframe or iframe handling failed, try direct checkbox selectors
+            for selector in recaptcha_checkbox_selectors:
+                checkbox = await page.query_selector(selector)
+                if checkbox:
+                    logger.info(f"Found CAPTCHA checkbox with selector: {selector}")
+                    await checkbox.click()
+                    logger.info("Clicked CAPTCHA checkbox")
+                    # Wait a moment for any verification to complete
+                    await page.wait_for_timeout(2000)
+                    return True
+            
+            # If no checkbox found, try to find the image CAPTCHA
             captcha_img = await page.query_selector("img[src*='captcha']")
             if not captcha_img:
                 # Try other potential selectors
                 captcha_img = await page.query_selector("#captcha")
             
             if not captcha_img:
-                logger.warning("Could not find CAPTCHA image element")
+                logger.warning("Could not find CAPTCHA image element or checkbox")
                 return False
             
             # Take a screenshot of the CAPTCHA
