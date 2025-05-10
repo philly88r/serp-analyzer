@@ -291,8 +291,20 @@ def search():
             # Run search asynchronously
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            serp_analysis = loop.run_until_complete(analyzer.analyze_serp(query, num_results))
-            loop.close()
+            try:
+                serp_analysis = loop.run_until_complete(analyzer.analyze_serp(query, num_results))
+                
+                # Validate that we got valid results and not an HTML error page
+                if isinstance(serp_analysis, dict) and "results" in serp_analysis:
+                    if not serp_analysis["results"] or len(serp_analysis["results"]) == 0:
+                        print(f"Warning: No search results found for query: {query}")
+                else:
+                    raise Exception("Invalid search results format returned")
+            except json.JSONDecodeError as json_err:
+                print(f"JSON decode error: {str(json_err)}")
+                raise Exception(f"Received invalid response format. This might be due to a CAPTCHA or block page.")
+            finally:
+                loop.close()
             
             # Save results
             analyzer.save_results(serp_analysis, "json")

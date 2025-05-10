@@ -1461,31 +1461,36 @@ class BypassSerpAnalyzer:
                     # Check if the request was successful
                     if response.status != 200:
                         logger.error(f"Direct HTTP request failed with status code {response.status}")
-                        # Removed: if proxy_url_http: proxy_manager.report_failure(proxy_url_http, is_block=(response.status == 403 or response.status == 429))
+                        if proxy_url_http:
+                            proxy_manager.report_failure(proxy_url_http, is_block=(response.status == 403 or response.status == 429))
                         return []
-                    
-                    # Removed: if proxy_url_http: proxy_manager.report_success(proxy_url_http)
 
                     # Get the HTML content
                     html_content = await response.text()
                     
-                    # Check for CAPTCHA or block page
-                    if "captcha" in html_content.lower() or "unusual traffic" in html_content.lower():
-                        logger.warning("CAPTCHA or block detected in direct HTTP response")
+                    # Check if we got a CAPTCHA or block page instead of search results
+                    if ("<!DOCTYPE html>" in html_content or "<html" in html_content) and \
+                       (not html_content.strip().startswith('{') and not html_content.strip().startswith('[')):
+                        logger.warning("Received HTML instead of JSON response")
                         self.captcha_detected = True
+                        
+                        # Save the HTML for debugging
+                        debug_dir = "debug"
+                        os.makedirs(debug_dir, exist_ok=True)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        debug_file = os.path.join(debug_dir, f"google_{timestamp}.html")
+                        with open(debug_file, "w", encoding="utf-8") as f:
+                            f.write(html_content)
+                        logger.info(f"Saved HTML to {debug_file} for debugging")
+                        
+                        # Report proxy failure if we're using a proxy
+                        if proxy_url_http:
+                            proxy_manager.report_failure(proxy_url_http, is_block=True)
+                        
+                        # Rotate proxy for next attempt
+                        self._rotate_proxy(force=True)
+                        
                         return []
-                    
-                    # Save the HTML for debugging
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    debug_file = f"debug/google_{timestamp}.html"
-                    with open(debug_file, "w", encoding="utf-8") as f:
-                        f.write(html_content)
-                    logger.info(f"Saved HTML to {debug_file} for debugging")
-                    
-                    # Parse the HTML
-                    soup = BeautifulSoup(html_content, "html.parser")
-                    
-                    # Extract search results
                     results = []
                     
                     # Method 1: Look for standard Google result containers
