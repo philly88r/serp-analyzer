@@ -9,6 +9,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const downloadCsv = document.getElementById('download-csv');
     const viewSerpHtml = document.getElementById('view-serp-html');
     const viewAnalysis = document.getElementById('view-analysis');
+    const generateBlog = document.getElementById('generate-blog');
+    const generateBlogButton = document.getElementById('generate-blog-button');
+    const viewBlogsButton = document.getElementById('view-blogs-button');
+    const extractedFacts = document.getElementById('extracted-facts');
     const comparativeTableBody = document.getElementById('comparative-table-body');
     const comparativeTableFooter = document.getElementById('comparative-table-footer');
     const seoRecommendations = document.getElementById('seo-recommendations');
@@ -608,5 +612,95 @@ document.addEventListener('DOMContentLoaded', function() {
         
         seoRecommendations.innerHTML = recommendations;
     }
+    
+    // Handle blog generation
+    function setupBlogGenerationHandlers() {
+        // Main generate blog button in the results section
+        if (generateBlog) {
+            generateBlog.addEventListener('click', function(e) {
+                e.preventDefault();
+                const query = document.getElementById('query').value;
+                if (!query) {
+                    alert('Please perform a search first');
+                    return;
+                }
+                
+                // Show loading state
+                generateBlog.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+                generateBlog.classList.add('disabled');
+                
+                // Redirect to the blog generation endpoint
+                window.location.href = `/generate_blog/${encodeURIComponent(query)}`;
+            });
+        }
+        
+        // Secondary generate blog button in the AI content section
+        if (generateBlogButton) {
+            generateBlogButton.addEventListener('click', function(e) {
+                e.preventDefault();
+                const query = document.getElementById('query').value;
+                if (!query) {
+                    alert('Please perform a search first');
+                    return;
+                }
+                
+                // Show loading state
+                generateBlogButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+                generateBlogButton.classList.add('disabled');
+                
+                // Redirect to the blog generation endpoint
+                window.location.href = `/generate_blog/${encodeURIComponent(query)}`;
+            });
+        }
+        
+        // View blogs button
+        if (viewBlogsButton) {
+            viewBlogsButton.addEventListener('click', function(e) {
+                e.preventDefault();
+                const query = document.getElementById('query').value;
+                if (!query) {
+                    alert('Please perform a search first');
+                    return;
+                }
+                
+                // Redirect to the blog view endpoint
+                window.location.href = `/view_blog/${encodeURIComponent(query)}`;
+            });
+        }
+    }
+    
+    // Display extracted facts when available
+    function displayExtractedFacts(facts) {
+        if (!extractedFacts || !facts || facts.length === 0) return;
+        
+        let factsHtml = '<h4>Extracted Facts</h4><ul class="facts-list">';
+        
+        facts.forEach(fact => {
+            factsHtml += `<li><i class="fas fa-check-circle"></i> ${fact}</li>`;
+        });
+        
+        factsHtml += '</ul>';
+        extractedFacts.innerHTML = factsHtml;
+    }
+    
+    // Initialize blog generation handlers
+    setupBlogGenerationHandlers();
+    
+    // Check for facts in the URL parameters
+    function getFactsFromUrl() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const factsParam = urlParams.get('facts');
+        if (factsParam) {
+            try {
+                const facts = JSON.parse(decodeURIComponent(factsParam));
+                displayExtractedFacts(facts);
+            } catch (e) {
+                console.error('Error parsing facts from URL:', e);
+            }
+        }
+    }
+    
+    // Check for facts on page load
+    getFactsFromUrl();
 });
     
