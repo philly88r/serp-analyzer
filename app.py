@@ -636,13 +636,25 @@ def serve_debug_file(filename):
     if '..' in filename or filename.startswith('/'):
         return jsonify({"error": "Invalid filename"}), 400
         
-    # Set the debug directory
-    debug_dir = os.path.join(app.root_path, 'debug')
+    # Set the debug directory - try multiple possible locations
+    possible_debug_dirs = [
+        os.path.join(app.root_path, 'debug'),
+        os.path.join(os.getcwd(), 'debug'),
+        '/app/debug',  # Render specific path
+        './debug'
+    ]
     
-    # Check if the file exists
-    file_path = os.path.join(debug_dir, filename)
-    if not os.path.exists(file_path):
-        return jsonify({"error": "File not found", "path": file_path}), 404
+    # Try to find the file in any of the possible debug directories
+    for debug_dir in possible_debug_dirs:
+        file_path = os.path.join(debug_dir, filename)
+        if os.path.exists(file_path):
+            break
+    else:
+        # File not found in any directory
+        return jsonify({"error": "File not found", "searched_paths": possible_debug_dirs}), 404
+        
+    # Log the file path for debugging
+    logger.info(f"Serving debug file: {file_path}")
     
     # Determine the content type based on file extension
     if filename.endswith('.png'):
@@ -657,26 +669,47 @@ def list_debug_files():
     """
     List all debug files available for inspection.
     """
-    debug_dir = os.path.join(app.root_path, 'debug')
+    # Check multiple possible debug directories
+    possible_debug_dirs = [
+        os.path.join(app.root_path, 'debug'),
+        os.path.join(os.getcwd(), 'debug'),
+        '/app/debug',  # Render specific path
+        './debug'
+    ]
     
-    # Create the directory if it doesn't exist
-    if not os.path.exists(debug_dir):
-        os.makedirs(debug_dir, exist_ok=True)
-        return jsonify({"files": []})
+    # Log which directories we're checking
+    logger.info(f"Checking debug directories: {possible_debug_dirs}")
     
-    # Get all files in the debug directory
+    # Get all files from all possible debug directories
     files = []
-    for filename in os.listdir(debug_dir):
-        file_path = os.path.join(debug_dir, filename)
-        if os.path.isfile(file_path):
-            # Get file info
-            file_info = {
-                "name": filename,
-                "size": os.path.getsize(file_path),
-                "modified": datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat(),
-                "url": f"/api/debug/{filename}"
-            }
-            files.append(file_info)
+    for debug_dir in possible_debug_dirs:
+        # Create the directory if it doesn't exist
+        if not os.path.exists(debug_dir):
+            try:
+                os.makedirs(debug_dir, exist_ok=True)
+                logger.info(f"Created debug directory: {debug_dir}")
+            except Exception as e:
+                logger.warning(f"Could not create debug directory {debug_dir}: {str(e)}")
+                continue
+        
+        try:
+            # Get all files in this debug directory
+            for filename in os.listdir(debug_dir):
+                file_path = os.path.join(debug_dir, filename)
+                if os.path.isfile(file_path):
+                    # Get file info
+                    file_info = {
+                        "name": filename,
+                        "directory": debug_dir,
+                        "size": os.path.getsize(file_path),
+                        "modified": datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat(),
+                        "url": f"/api/debug/{filename}"
+                    }
+                    files.append(file_info)
+            
+            logger.info(f"Found {len(files)} files in {debug_dir}")
+        except Exception as e:
+            logger.warning(f"Error listing files in {debug_dir}: {str(e)}")
     
     # Sort by modification time (newest first)
     files.sort(key=lambda x: x["modified"], reverse=True)

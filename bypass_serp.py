@@ -63,6 +63,11 @@ class BypassSerpAnalyzer:
         os.makedirs("results", exist_ok=True)
         os.makedirs("debug", exist_ok=True)
         
+        # Make sure debug directory is absolute path
+        self.debug_dir = os.path.join(os.getcwd(), "debug")
+        os.makedirs(self.debug_dir, exist_ok=True)
+        logger.info(f"Debug directory set to: {self.debug_dir}")
+        
         # Initialize new components if available
         try:
             # Initialize database
@@ -777,7 +782,9 @@ class BypassSerpAnalyzer:
                     raw_proxy_url = proxy_manager.get_proxy()
                     if raw_proxy_url:
                         parsed_url = urlparse(raw_proxy_url)
-                        proxy_config_playwright = {"server": f"{parsed_url.scheme}://{parsed_url.hostname}:{parsed_url.port}"}
+                        # Preserve the exact scheme (especially for socks5h which is different from socks5)
+                        proxy_scheme = parsed_url.scheme
+                        proxy_config_playwright = {"server": f"{proxy_scheme}://{parsed_url.hostname}:{parsed_url.port}"}
                         if parsed_url.username:
                             proxy_config_playwright["username"] = parsed_url.username
                         if parsed_url.password:
@@ -855,13 +862,13 @@ class BypassSerpAnalyzer:
                 
                 # Save screenshot for debugging
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = f"debug/google_screenshot_{timestamp}.png"
+                screenshot_path = os.path.join(self.debug_dir, f"google_screenshot_{timestamp}.png")
                 await page.screenshot(path=screenshot_path)
                 logger.info(f"Saved screenshot to {screenshot_path}")
                 
                 # Save HTML for debugging
                 html_content = await page.content()
-                debug_file = f"debug/google_playwright_{timestamp}.html"
+                debug_file = os.path.join(self.debug_dir, f"google_playwright_{timestamp}.html")
                 with open(debug_file, "w", encoding="utf-8") as f:
                     f.write(html_content)
                 logger.info(f"Saved HTML to {debug_file} for debugging")
@@ -1049,25 +1056,22 @@ class BypassSerpAnalyzer:
                 return results
                 
             return []
-    except Exception as e:
-        logger.error(f"Error solving CAPTCHA: {str(e)}")
-        await browser.close()
-        return []
+        except Exception as e:
+            logger.error(f"Error in Playwright search: {str(e)}")
+            try:
+                await browser.close()
+            except:
+                pass
+            return []
 
-# Extract search results
-results = []
-
-# Try multiple selectors for search result containers
-# First, try a more general approach to find all search results
-try:
-    # This JavaScript will find all likely search result containers
-    general_results = await page.evaluate("""
-        function() {
-            const results = [];
+    async def _solve_captcha(self, page):
+        """
+        Attempt to solve a CAPTCHA on the page using OCR.
+        
+        Args:
+            page: The Playwright page object
             
-            // Find all elements that look like search results
-            // Look for elements with titles (h3) and links
-            const h3Elements = Array.from(document.querySelectorAll('h3'));
+        Returns:
             bool: True if CAPTCHA was solved, False otherwise
         """
         try:
@@ -1283,7 +1287,7 @@ try:
             # Take an additional screenshot of the CAPTCHA
             try:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                captcha_screenshot_path = f"debug/captcha_screenshot_{timestamp}.png"
+                captcha_screenshot_path = os.path.join(self.debug_dir, f"captcha_screenshot_{timestamp}.png")
                 await page.screenshot(path=captcha_screenshot_path)
                 logger.info(f"Saved CAPTCHA screenshot to {captcha_screenshot_path}")
             except Exception as e:
@@ -1350,21 +1354,43 @@ try:
                 "1P_JAR": datetime.now().strftime("%Y-%m-%d-%H")
             }
             
-            async with aiohttp.ClientSession(headers=headers) as session:
-                proxy_url_http = None
-                try:
-                    proxy_url_http = proxy_manager.get_proxy() # Get string URL directly
-                    if proxy_url_http:
-                        logger.info(f"Using proxy for direct HTTP search: {proxy_url_http}")
+            # Configure aiohttp session with proper proxy handling
+            connector = None
+            proxy_url_http = None
+            try:
+                proxy_url_http = proxy_manager.get_proxy()
+                if proxy_url_http:
+                    # For SOCKS5/SOCKS5h proxies, we need to use a special connector
+                    if proxy_url_http.startswith('socks5://') or proxy_url_http.startswith('socks5h://'):
+                        try:
+                            # Import aiohttp_socks for SOCKS proxy support
+                            from aiohttp_socks import ProxyConnector
+                            logger.info(f"Using SOCKS5 proxy for direct HTTP search with aiohttp_socks connector")
+                            connector = ProxyConnector.from_url(proxy_url_http)
+                        except ImportError:
+                            logger.error("aiohttp_socks package not installed. Cannot use SOCKS5 proxy with aiohttp.")
+                            logger.error("Install with: pip install aiohttp_socks")
+                            proxy_url_http = None
                     else:
-                        logger.info("No proxy returned by proxy_manager for direct HTTP search.")
-                except NameError:
-                    logger.warning("proxy_manager not available for direct HTTP search")
-                except Exception as e:
-                    logger.error(f"Error getting proxy for direct HTTP: {str(e)}")
-
+                        logger.info(f"Using HTTP proxy for direct HTTP search: {proxy_url_http}")
+                else:
+                    logger.info("No proxy returned by proxy_manager for direct HTTP search.")
+            except NameError:
+                logger.warning("proxy_manager not available for direct HTTP search")
+            except Exception as e:
+                logger.error(f"Error getting proxy for direct HTTP: {str(e)}")
+                
+            # Create session with appropriate connector if using SOCKS
+            if connector:
+                session_kwargs = {'headers': headers, 'connector': connector}
+                proxy_arg = None  # Don't pass proxy arg when using connector
+            else:
+                session_kwargs = {'headers': headers}
+                proxy_arg = proxy_url_http  # Only pass proxy arg for HTTP proxies
+                
+            async with aiohttp.ClientSession(**session_kwargs) as session:
                 # Make the request
-                async with session.get(search_url, timeout=15, proxy=proxy_url_http) as response:
+                async with session.get(search_url, timeout=15, proxy=proxy_arg) as response:
                     logger.info(f"Direct HTTP request status code: {response.status}")
                     
                     # Check if the request was successful

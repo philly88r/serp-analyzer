@@ -38,10 +38,16 @@ class ProxyManager:
                 else:
                     logger.info(f"Render env: {key}={value}")
             
-            # On Render, always use our known working proxy configuration
-            logger.info("Setting hardcoded proxy configuration for Render environment")
-            self.rotating_proxy_endpoint = "http://customer-pematthews41_5eo28-cc-us:Yitbos88++88@pr.oxylabs.io:7777"
-            logger.info("Successfully set hardcoded proxy configuration on Render")
+            # On Render, use the SOCKS5h proxy from environment variables if available
+            logger.info("Setting proxy configuration for Render environment")
+            render_proxy = os.environ.get('ROTATING_PROXY_ENDPOINT')
+            if render_proxy:
+                self.rotating_proxy_endpoint = render_proxy
+                logger.info("Using proxy from ROTATING_PROXY_ENDPOINT environment variable on Render")
+            else:
+                # Fallback to hardcoded proxy if environment variable not set
+                self.rotating_proxy_endpoint = "socks5h://customer-pematthews41_5eo28-cc-us:Yitbos88++88@pr.oxylabs.io:7777"
+                logger.info("Using fallback hardcoded SOCKS5h proxy configuration on Render")
             return
         
         # For non-Render environments, try multiple environment variable names for the proxy
@@ -94,15 +100,22 @@ class ProxyManager:
             logger.warning("get_proxy called but no rotating_proxy_endpoint is configured.")
             return None
             
-        # Ensure the proxy URL has the http:// prefix
+        # Ensure the proxy URL has the appropriate protocol prefix
         proxy_url = self.rotating_proxy_endpoint
-        if not proxy_url.startswith('http://') and not proxy_url.startswith('https://') and not proxy_url.startswith('socks5://'):
+        if not any(proxy_url.startswith(protocol) for protocol in ['http://', 'https://', 'socks5://', 'socks5h://']):
             proxy_url = f'http://{proxy_url}'
             logger.debug(f"Added http:// prefix to proxy URL: {proxy_url}")
         
+        # Log the protocol being used
+        protocol = proxy_url.split('://')[0] if '://' in proxy_url else 'unknown'
+        logger.info(f"Using proxy with protocol: {protocol}")
+        
         # Log proxy usage on Render for debugging
         if is_render:
-            logger.info(f"Using proxy on Render: {proxy_url[:10]}...")
+            # Mask sensitive parts but show the protocol and domain
+            protocol = proxy_url.split('://')[0] if '://' in proxy_url else 'unknown'
+            domain = proxy_url.split('@')[-1] if '@' in proxy_url else proxy_url.split('://')[-1]
+            logger.info(f"Using proxy on Render: {protocol}://*****@{domain}")
             
         return proxy_url
     
