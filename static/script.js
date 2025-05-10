@@ -629,8 +629,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 generateBlog.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
                 generateBlog.classList.add('disabled');
                 
-                // Redirect to the blog generation endpoint
-                window.location.href = `/generate_blog/${encodeURIComponent(query)}`;
+                // Use fetch API instead of direct navigation
+                fetch(`/generate_blog/${encodeURIComponent(query)}`, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                })
+                .then(response => {
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                    } else {
+                        return response.json().catch(() => response.text());
+                    }
+                })
+                .then(data => {
+                    if (data && typeof data === 'object' && data.redirect) {
+                        window.location.href = data.redirect;
+                    } else {
+                        // Default fallback
+                        window.location.href = `/view_blog/${encodeURIComponent(query)}`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error generating blog:', error);
+                    alert('Error generating blog. Please try again.');
+                    // Reset button state
+                    generateBlog.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
+                    generateBlog.classList.remove('disabled');
+                });
             });
         }
         
@@ -648,8 +675,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 generateBlogButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
                 generateBlogButton.classList.add('disabled');
                 
-                // Redirect to the blog generation endpoint
-                window.location.href = `/generate_blog/${encodeURIComponent(query)}`;
+                // Use fetch API instead of direct navigation
+                fetch(`/generate_blog/${encodeURIComponent(query)}`, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                })
+                .then(response => {
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                    } else {
+                        return response.json().catch(() => response.text());
+                    }
+                })
+                .then(data => {
+                    if (data && typeof data === 'object' && data.redirect) {
+                        window.location.href = data.redirect;
+                    } else {
+                        // Default fallback
+                        window.location.href = `/view_blog/${encodeURIComponent(query)}`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error generating blog:', error);
+                    alert('Error generating blog. Please try again.');
+                    // Reset button state
+                    generateBlog.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
+                    generateBlog.classList.remove('disabled');
+                });
             });
         }
         
@@ -685,6 +739,24 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initialize blog generation handlers
     setupBlogGenerationHandlers();
+    
+    // Update hidden query inputs for blog generation forms
+    function updateQueryInputs() {
+        const query = document.getElementById('query').value;
+        const blogQueryInput = document.getElementById('blog-query-input');
+        const blogQueryInput2 = document.getElementById('blog-query-input2');
+        const blogViewInput = document.getElementById('blog-view-input');
+        
+        if (blogQueryInput) blogQueryInput.value = query;
+        if (blogQueryInput2) blogQueryInput2.value = query;
+        if (blogViewInput) blogViewInput.value = query;
+    }
+    
+    // Update query inputs when page loads
+    updateQueryInputs();
+    
+    // Update query inputs when query input changes
+    document.getElementById('query').addEventListener('input', updateQueryInputs);
     
     // Check for facts in the URL parameters
     function getFactsFromUrl() {

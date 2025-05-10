@@ -107,9 +107,12 @@
                         <a id="view-analysis" href="#" class="btn-secondary">
                             <i class="fas fa-chart-bar"></i> View Full Analysis
                         </a>
-                        <a id="generate-blog" href="#" class="btn-primary">
-                            <i class="fas fa-blog"></i> Generate AI Blog
-                        </a>
+                        <form action="/generate_blog/" method="get" style="display: inline;">
+                            <input type="hidden" name="query" id="blog-query-input" value="">
+                            <button type="submit" id="generate-blog" class="btn-primary">
+                                <i class="fas fa-blog"></i> Generate AI Blog
+                            </button>
+                        </form>
                     </div>
                 </div>
             </div>
@@ -205,12 +208,18 @@
                                 <li>Includes proper formatting and HTML output</li>
                             </ul>
                             <div class="action-buttons">
-                                <a id="generate-blog-button" href="#" class="btn-primary">
-                                    <i class="fas fa-magic"></i> Generate Blog
-                                </a>
-                                <a id="view-blogs-button" href="#" class="btn-secondary">
-                                    <i class="fas fa-eye"></i> View Generated Blogs
-                                </a>
+                                <form action="/generate_blog/" method="get" style="display: inline;">
+                                    <input type="hidden" name="query" id="blog-query-input2" value="">
+                                    <button type="submit" id="generate-blog-button" class="btn-primary">
+                                        <i class="fas fa-magic"></i> Generate Blog
+                                    </button>
+                                </form>
+                                <form action="/view_blog/" method="get" style="display: inline;">
+                                    <input type="hidden" name="query" id="blog-view-input" value="">
+                                    <button type="submit" id="view-blogs-button" class="btn-secondary">
+                                        <i class="fas fa-eye"></i> View Generated Blogs
+                                    </button>
+                                </form>
                             </div>
                         </div>
                         

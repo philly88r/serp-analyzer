@@ -350,8 +350,15 @@ def analyze(query):
         flash(f'Error during analysis: {str(e)}', 'danger')
         return redirect(url_for('index'))
 
-@app.route('/generate_blog/<query>')
-def generate_blog(query):
+@app.route('/generate_blog/', methods=['GET'])
+@app.route('/generate_blog/<query>', methods=['GET'])
+def generate_blog(query=None):
+    # If query is None, get it from the request parameters
+    if query is None:
+        query = request.args.get('query')
+        if not query:
+            flash('Please provide a search query', 'danger')
+            return redirect(url_for('index'))
     # Replace spaces with underscores for file operations
     query_file = query.replace(' ', '_')
     
@@ -492,8 +499,15 @@ def view_analysis(query):
         return redirect(url_for('index'))
     
 
-@app.route('/view_blog/<query>')
-def view_blog(query):
+@app.route('/view_blog/', methods=['GET'])
+@app.route('/view_blog/<query>', methods=['GET'])
+def view_blog(query=None):
+    # If query is None, get it from the request parameters
+    if query is None:
+        query = request.args.get('query')
+        if not query:
+            flash('Please provide a search query', 'danger')
+            return redirect(url_for('index'))
     # Replace spaces with underscores for file operations
     query_file = query.replace(' ', '_')
     
