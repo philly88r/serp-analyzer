@@ -841,7 +841,7 @@ def convert_markdown_to_html(markdown_content):
     
     return html_template
 
-def save_blog_post(content, output_file, save_html=True):
+def save_blog_post(content, output_file, save_html=True, html_dir=None):
     """Save the generated blog post to a file"""
     # Save markdown version
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -850,7 +850,17 @@ def save_blog_post(content, output_file, save_html=True):
     
     # Also save as HTML if requested
     if save_html:
-        html_output_file = os.path.splitext(output_file)[0] + '.html'
+        # Get the base filename without path
+        base_filename = os.path.basename(output_file)
+        html_filename = os.path.splitext(base_filename)[0] + '.html'
+        
+        # If html_dir is specified, save HTML there, otherwise save next to markdown file
+        if html_dir:
+            os.makedirs(html_dir, exist_ok=True)
+            html_output_file = os.path.join(html_dir, html_filename)
+        else:
+            html_output_file = os.path.splitext(output_file)[0] + '.html'
+        
         html_content = convert_markdown_to_html(content)
         with open(html_output_file, 'w', encoding='utf-8') as f:
             f.write(html_content)
@@ -909,8 +919,24 @@ def main(args=None):
         query = seo_insights['query'].replace(' ', '_').lower()
         output_file = f"blog_{query}.md"
     
+    # Get the HTML reports directory from environment variable or Flask app
+    html_dir = None
+    
+    # First check environment variable (set by app.py)
+    if 'HTML_REPORTS_DIR' in os.environ:
+        html_dir = os.environ['HTML_REPORTS_DIR']
+        print(f"Using HTML reports directory from environment: {html_dir}")
+    else:
+        # Try to import from app (this might not work if running standalone)
+        try:
+            from app import get_html_report_dir
+            html_dir = get_html_report_dir()
+            print(f"Using HTML reports directory from app: {html_dir}")
+        except ImportError:
+            print("Not running in Flask app, HTML will be saved next to markdown file")
+    
     # Save both markdown and HTML versions
-    html_output_file = save_blog_post(blog_content, output_file, save_html=True)
+    html_output_file = save_blog_post(blog_content, output_file, save_html=True, html_dir=html_dir)
     
     print(f"Successfully generated blog post for '{seo_insights['query']}'")
     print(f"Target metrics to outrank competitors:")

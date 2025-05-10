@@ -365,26 +365,32 @@ def generate_blog(query):
         # Generate blog post
         output_file = os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}.md')
         
-        # Use the new generate_seo_blog.main function that returns both MD and HTML files
+        # Pass the HTML reports directory directly to generate_seo_blog.main
+        # This will ensure HTML files are saved in the correct location
+        html_reports_dir = app.config['HTML_REPORTS_FOLDER']
+        
+        # Modify the environment to make the HTML reports directory available
+        os.environ['HTML_REPORTS_DIR'] = html_reports_dir
+        
+        # Use the updated generate_seo_blog.main function
         result = generate_seo_blog.main([serp_file, '--output', output_file])
         
-        # The HTML file is now generated automatically by generate_seo_blog.py
+        # Log the result for debugging
+        print(f"Blog generation result: {result}")
+        
+        # Verify the HTML file exists
         if 'html_output_file' in result and result['html_output_file']:
-            # Copy the HTML file to the HTML_REPORTS_FOLDER if it's not already there
-            html_basename = os.path.basename(result['html_output_file'])
-            html_destination = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_basename)
-            
-            if result['html_output_file'] != html_destination:
-                with open(result['html_output_file'], 'r', encoding='utf-8') as src_file:
-                    html_content = src_file.read()
-                
-                with open(html_destination, 'w', encoding='utf-8') as dest_file:
-                    dest_file.write(html_content)
-                
-                print(f"Copied HTML file to {html_destination}")
+            html_file = result['html_output_file']
+            if os.path.exists(html_file):
+                print(f"HTML file successfully generated at: {html_file}")
+            else:
+                print(f"Warning: HTML file not found at expected location: {html_file}")
+                # Fallback to the old method
+                html_file = md_to_html.convert_md_to_html(output_file, html_reports_dir)
+                print(f"Used fallback HTML generation: {html_file}")
         else:
             # Fallback to the old method if for some reason the HTML file wasn't generated
-            html_file = md_to_html.convert_md_to_html(output_file, app.config['HTML_REPORTS_FOLDER'])
+            html_file = md_to_html.convert_md_to_html(output_file, html_reports_dir)
             print(f"Used fallback HTML generation: {html_file}")
         
         flash(f'Successfully generated blog post for "{query}" with automatic HTML output', 'success')
