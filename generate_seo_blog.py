@@ -79,7 +79,94 @@ def extract_seo_insights(seo_data, html_dir=None):
     }
 
 def extract_facts_from_page(page_data, query):
-    """Extract factual information from page content"""
+    """Extract factual information from page content using AI"""
+    try:
+        # Check if Gemini API key is available
+        gemini_api_key = os.environ.get('GEMINI_API_KEY')
+        if not gemini_api_key:
+            print("Warning: GEMINI_API_KEY not found in environment variables. Falling back to rule-based extraction.")
+            return extract_facts_rule_based(page_data, query)
+        
+        # Prepare content for AI processing
+        content = ""
+        
+        # Add title and description
+        if 'title' in page_data:
+            content += f"Title: {page_data['title']}\n\n"
+        if 'description' in page_data:
+            content += f"Description: {page_data['description']}\n\n"
+        
+        # Add headings
+        if 'headings' in page_data:
+            content += "Headings:\n"
+            for heading_type in ['h1', 'h2', 'h3']:
+                if heading_type in page_data['headings']:
+                    for heading in page_data['headings'][heading_type][:5]:  # Limit to 5 headings per type
+                        content += f"{heading_type.upper()}: {heading}\n"
+            content += "\n"
+        
+        # Add main content
+        if 'content' in page_data and 'sample' in page_data['content']:
+            content += f"Content Sample:\n{page_data['content']['sample']}\n\n"
+        
+        # Prepare the prompt for Gemini
+        prompt = f"""Extract factual information from the following webpage content related to the query: '{query}'.
+        
+        WEBPAGE CONTENT:
+        {content}
+        
+        INSTRUCTIONS:
+        1. Extract 5-10 specific, factual statements from the content.
+        2. Focus on information that would be useful for writing a blog post about '{query}'.
+        3. Ignore opinions, marketing claims, or vague statements.
+        4. Return only the factual statements, one per line.
+        5. Do not make up or infer facts not present in the content.
+        6. Format each fact as a complete sentence.
+        
+        FACTS:
+        """
+        
+        # Call Gemini API
+        import requests
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+        }
+        data = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "topP": 0.8,
+                "topK": 40,
+                "maxOutputTokens": 1024,
+            }
+        }
+        
+        response = requests.post(
+            f"{url}?key={gemini_api_key}",
+            headers=headers,
+            json=data
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'candidates' in result and len(result['candidates']) > 0:
+                text = result['candidates'][0]['content']['parts'][0]['text']
+                # Extract facts from the response
+                facts = [line.strip() for line in text.split('\n') if line.strip() and not line.strip().startswith('FACT') and len(line.strip()) > 20]
+                print(f"AI extracted {len(facts)} facts from content")
+                return facts[:10]  # Limit to 10 facts
+        
+        print(f"Warning: AI fact extraction failed with status {response.status_code}. Falling back to rule-based extraction.")
+        return extract_facts_rule_based(page_data, query)
+    
+    except Exception as e:
+        print(f"Error in AI fact extraction: {str(e)}. Falling back to rule-based extraction.")
+        return extract_facts_rule_based(page_data, query)
+
+
+def extract_facts_rule_based(page_data, query):
+    """Extract factual information from page content using rule-based approach (fallback)"""
     facts = []
     
     # Extract facts from content sample if available
@@ -212,20 +299,39 @@ def generate_blog_variables(seo_insights):
     industry = detect_industry(query)
     current_year = datetime.now().year
     
-    # Extract all unique features/facts from competitors
+    # Extract all unique features from competitors
     all_unique_features = []
     for comp in competitors:
         if 'unique_features' in comp and comp['unique_features']:
             all_unique_features.extend(comp['unique_features'])
     
-    # Collect facts from all_unique_facts if available
+    # Collect AI-extracted facts from competitors
+    all_facts = []
+    fact_by_competitor = {}
+    
+    # First collect facts from individual competitors
+    for i, comp in enumerate(competitors):
+        if 'unique_facts' in comp and comp['unique_facts']:
+            comp_facts = comp['unique_facts']
+            fact_by_competitor[f'COMPETITOR_{i+1}'] = comp_facts
+            all_facts.extend(comp_facts)
+    
+    # Then collect facts from the consolidated all_unique_facts
     if 'all_unique_facts' in seo_insights and seo_insights['all_unique_facts']:
+        # Handle both string facts and dict facts
         for fact in seo_insights['all_unique_facts']:
             if isinstance(fact, dict) and 'fact' in fact:
-                all_unique_features.append(fact['fact'])
+                all_facts.append(fact['fact'])
+            elif isinstance(fact, str):
+                all_facts.append(fact)
     
-    # Deduplicate features
+    print(f"Collected {len(all_facts)} total facts from all sources")
+    
+    # Deduplicate facts and features
     unique_features = []
+    unique_facts = []
+    
+    # First deduplicate features
     for feature in all_unique_features:
         is_duplicate = False
         for unique_feature in unique_features:
@@ -235,6 +341,19 @@ def generate_blog_variables(seo_insights):
                 break
         if not is_duplicate:
             unique_features.append(feature)
+    
+    # Then deduplicate facts
+    for fact in all_facts:
+        is_duplicate = False
+        for unique_fact in unique_facts:
+            # Simple string similarity check
+            if similarity_score(fact, unique_fact) > 0.7:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_facts.append(fact)
+    
+    print(f"After deduplication: {len(unique_features)} unique features and {len(unique_facts)} unique facts")
     
     # Create variables dictionary
     variables = {
@@ -270,7 +389,12 @@ def generate_blog_variables(seo_insights):
         'TOOL_3': f"Advanced {industry} Suite",
         'TECHNOLOGY_1': "artificial intelligence",
         'TREND_1': "personalization",
-        'TREND_2': "automated optimization"
+        'TREND_2': "automated optimization",
+        
+        # Add AI-extracted facts to the variables
+        'AI_FACTS_AVAILABLE': 'yes' if unique_facts else 'no',
+        'AI_FACTS_COUNT': str(len(unique_facts)),
+        'ALL_AI_FACTS': '\n'.join([f'- {fact}' for fact in unique_facts]) if unique_facts else 'No facts available',
     }
     
     # Extract competitor-specific information
@@ -278,6 +402,25 @@ def generate_blog_variables(seo_insights):
         variables[f'COMPETITOR_{i+1}'] = comp['name']
         if comp.get('unique_features'):
             variables[f'UNIQUE_FEATURE_{i+1}'] = comp['unique_features'][0]
+        
+        # Add competitor-specific facts if available
+        if f'COMPETITOR_{i+1}' in fact_by_competitor and fact_by_competitor[f'COMPETITOR_{i+1}']:
+            comp_facts = fact_by_competitor[f'COMPETITOR_{i+1}']
+            variables[f'COMPETITOR_{i+1}_FACTS_AVAILABLE'] = 'yes'
+            variables[f'COMPETITOR_{i+1}_FACTS_COUNT'] = str(len(comp_facts))
+            variables[f'COMPETITOR_{i+1}_FACTS'] = '\n'.join([f'- {fact}' for fact in comp_facts[:5]])
+            
+            # Add individual facts
+            for j, fact in enumerate(comp_facts[:3]):
+                variables[f'COMPETITOR_{i+1}_FACT_{j+1}'] = fact
+        else:
+            variables[f'COMPETITOR_{i+1}_FACTS_AVAILABLE'] = 'no'
+            variables[f'COMPETITOR_{i+1}_FACTS_COUNT'] = '0'
+            variables[f'COMPETITOR_{i+1}_FACTS'] = 'No facts available'
+    
+    # Add individual facts to variables
+    for i, fact in enumerate(unique_facts[:10]):
+        variables[f'FACT_{i+1}'] = fact
     
     # Generate use cases based on the query
     use_cases = generate_use_cases(query)

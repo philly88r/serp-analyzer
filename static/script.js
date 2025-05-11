@@ -1,4 +1,3 @@
-
 document.addEventListener('DOMContentLoaded', function() {
     const searchForm = document.getElementById('search-form');
     const loadingDiv = document.getElementById('loading');
@@ -616,48 +615,38 @@ document.addEventListener('DOMContentLoaded', function() {
     // Handle blog generation
     function setupBlogGenerationHandlers() {
         // Main generate blog button in the results section
-        if (generateBlog) {
-            generateBlog.addEventListener('click', function(e) {
-                e.preventDefault();
-                const query = document.getElementById('query').value;
-                if (!query) {
-                    alert('Please perform a search first');
+        if (generateBlog) { 
+            const blogForm = generateBlog.form; 
+
+            if (!blogForm) {
+                console.error("Generate Blog button (id='generate-blog') is not inside a form. Cannot attach handler.");
+                return;
+            }
+
+            generateBlog.addEventListener('click', function(event) {
+                const queryValue = document.getElementById('query').value; 
+
+                generateBlog.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+                generateBlog.disabled = true;
+
+                if (!queryValue) {
+                    event.preventDefault(); 
+                    alert('Please perform a search first to provide a query for the blog.');
                     return;
                 }
+
+                const hiddenQueryInput = blogForm.elements['query']; 
                 
-                // Show loading state
-                generateBlog.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
-                generateBlog.classList.add('disabled');
-                
-                // Use fetch API instead of direct navigation
-                fetch(`/generate_blog/${encodeURIComponent(query)}`, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json'
-                    }
-                })
-                .then(response => {
-                    if (response.redirected) {
-                        window.location.href = response.url;
-                    } else {
-                        return response.json().catch(() => response.text());
-                    }
-                })
-                .then(data => {
-                    if (data && typeof data === 'object' && data.redirect) {
-                        window.location.href = data.redirect;
-                    } else {
-                        // Default fallback
-                        window.location.href = `/view_blog/${encodeURIComponent(query)}`;
-                    }
-                })
-                .catch(error => {
-                    console.error('Error generating blog:', error);
-                    alert('Error generating blog. Please try again.');
-                    // Reset button state
-                    generateBlog.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
-                    generateBlog.classList.remove('disabled');
-                });
+                if (hiddenQueryInput) {
+                    hiddenQueryInput.value = queryValue;
+                } else {
+                    event.preventDefault(); 
+                    alert('Internal error: The blog query input field is missing from the form.');
+                    return;
+                }
+
+                // DO NOT call event.preventDefault().
+                // Allow the default form submission to proceed.
             });
         }
         
@@ -671,11 +660,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 
-                // Show loading state
                 generateBlogButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
                 generateBlogButton.classList.add('disabled');
                 
-                // Use fetch API instead of direct navigation
                 fetch(`/generate_blog/${encodeURIComponent(query)}`, {
                     method: 'GET',
                     headers: {
@@ -693,16 +680,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (data && typeof data === 'object' && data.redirect) {
                         window.location.href = data.redirect;
                     } else {
-                        // Default fallback
                         window.location.href = `/view_blog/${encodeURIComponent(query)}`;
                     }
                 })
                 .catch(error => {
                     console.error('Error generating blog:', error);
                     alert('Error generating blog. Please try again.');
-                    // Reset button state
-                    generateBlog.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
-                    generateBlog.classList.remove('disabled');
+                    generateBlogButton.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
+                    generateBlogButton.classList.remove('disabled');
                 });
             });
         }
@@ -717,7 +702,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 
-                // Redirect to the blog view endpoint
                 window.location.href = `/view_blog/${encodeURIComponent(query)}`;
             });
         }
@@ -775,4 +759,3 @@ document.addEventListener('DOMContentLoaded', function() {
     // Check for facts on page load
     getFactsFromUrl();
 });
-    
