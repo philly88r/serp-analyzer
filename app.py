@@ -343,6 +343,40 @@ def analyze(query):
         # Run SEO analysis
         seo_analyzer.main(['--input', serp_file])
         
+        # Extract and save HTML content for blog generation
+        print(f"Extracting HTML content for blog generation from {serp_file}")
+        try:
+            # Load SERP results
+            with open(serp_file, 'r', encoding='utf-8') as f:
+                serp_data = json.load(f)
+            
+            # Create HTML extraction directory if it doesn't exist
+            html_extraction_dir = os.path.join(app.config['ANALYSIS_FOLDER'], f'html_{query_file}')
+            os.makedirs(html_extraction_dir, exist_ok=True)
+            
+            # Extract HTML content from each result
+            if 'results' in serp_data and serp_data['results']:
+                for i, result in enumerate(serp_data['results']):
+                    if 'url' in result:
+                        try:
+                            # Use the analyze_page function to extract content
+                            page_data = analyze_page(result['url'])
+                            
+                            # Save the extracted content
+                            html_file = os.path.join(html_extraction_dir, f'page_{i+1}.json')
+                            with open(html_file, 'w', encoding='utf-8') as f:
+                                json.dump(page_data, f, indent=2)
+                            
+                            print(f"Saved HTML content for {result['url']} to {html_file}")
+                        except Exception as page_error:
+                            print(f"Error extracting HTML from {result['url']}: {str(page_error)}")
+                
+                print(f"Successfully extracted HTML content from {len(serp_data['results'])} pages")
+            else:
+                print("No results found in SERP data for HTML extraction")
+        except Exception as html_error:
+            print(f"Error during HTML extraction: {str(html_error)}")
+        
         flash(f'Successfully created SEO analysis for "{query}"', 'success')
         return redirect(url_for('index'))
     
@@ -353,12 +387,17 @@ def analyze(query):
 @app.route('/generate_blog/', methods=['GET'])
 @app.route('/generate_blog/<query>', methods=['GET'])
 def generate_blog(query=None):
+    print(f"\n\n==== BLOG GENERATION REQUESTED ====\n")
     # If query is None, get it from the request parameters
     if query is None:
         query = request.args.get('query')
+        print(f"Query from request args: {query}")
         if not query:
+            print("ERROR: No query provided in request")
             flash('Please provide a search query', 'danger')
             return redirect(url_for('index'))
+    else:
+        print(f"Query from URL parameter: {query}")
     # Replace spaces with underscores for file operations
     query_file = query.replace(' ', '_')
     
@@ -379,8 +418,58 @@ def generate_blog(query=None):
         # Modify the environment to make the HTML reports directory available
         os.environ['HTML_REPORTS_DIR'] = html_reports_dir
         
+        # Check if we have extracted HTML content
+        html_extraction_dir = os.path.join(app.config['ANALYSIS_FOLDER'], f'html_{query_file}')
+        if not os.path.exists(html_extraction_dir):
+            print(f"HTML extraction directory not found: {html_extraction_dir}")
+            print("Running analysis to extract HTML content first...")
+            # Run the analyze function to extract HTML content
+            try:
+                # Clean up old analysis files
+                seo_analyzer.clean_all_directories()
+                
+                # Run SEO analysis
+                seo_analyzer.main(['--input', serp_file])
+                
+                # Extract and save HTML content for blog generation
+                print(f"Extracting HTML content for blog generation from {serp_file}")
+                # Load SERP results
+                with open(serp_file, 'r', encoding='utf-8') as f:
+                    serp_data = json.load(f)
+                
+                # Create HTML extraction directory if it doesn't exist
+                os.makedirs(html_extraction_dir, exist_ok=True)
+                
+                # Extract HTML content from each result
+                if 'results' in serp_data and serp_data['results']:
+                    for i, result in enumerate(serp_data['results']):
+                        if 'url' in result:
+                            try:
+                                # Use the analyze_page function to extract content
+                                page_data = analyze_page(result['url'])
+                                
+                                # Save the extracted content
+                                html_file = os.path.join(html_extraction_dir, f'page_{i+1}.json')
+                                with open(html_file, 'w', encoding='utf-8') as f:
+                                    json.dump(page_data, f, indent=2)
+                                
+                                print(f"Saved HTML content for {result['url']} to {html_file}")
+                            except Exception as page_error:
+                                print(f"Error extracting HTML from {result['url']}: {str(page_error)}")
+                    
+                    print(f"Successfully extracted HTML content from {len(serp_data['results'])} pages")
+                else:
+                    print("No results found in SERP data for HTML extraction")
+            except Exception as html_error:
+                print(f"Error during HTML extraction: {str(html_error)}")
+        else:
+            print(f"Found existing HTML extraction directory: {html_extraction_dir}")
+        
+        # Pass the HTML extraction directory to generate_seo_blog.main
+        os.environ['HTML_EXTRACTION_DIR'] = html_extraction_dir
+        
         # Use the updated generate_seo_blog.main function
-        result = generate_seo_blog.main([serp_file, '--output', output_file])
+        result = generate_seo_blog.main([serp_file, '--output', output_file, '--html-dir', html_extraction_dir])
         
         # Log the result for debugging
         print(f"Blog generation result: {result}")

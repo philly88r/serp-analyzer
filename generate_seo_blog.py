@@ -16,15 +16,18 @@ def load_seo_analysis(json_file):
     with open(json_file, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def extract_seo_insights(seo_data):
+def extract_seo_insights(seo_data, html_dir=None):
     """Extract key SEO insights from analysis data"""
     query = seo_data.get('query', '')
     results = seo_data.get('results', [])
     
     # Extract competitor information
     competitors = []
+    all_unique_facts = []
+    
     for i, result in enumerate(results[:6]):
-        competitors.append({
+        # Initialize competitor data
+        competitor_data = {
             'position': i + 1,
             'name': result.get('title', '').split(' - ')[0].strip(),
             'url': result.get('url', ''),
@@ -40,7 +43,25 @@ def extract_seo_insights(seo_data):
             'schema_count': result.get('schema_count', 0),
             'keyword_density': result.get('keyword_density', 0),
             'unique_features': extract_unique_features(result)
-        })
+        }
+        
+        # Try to extract facts from HTML content if available
+        if html_dir and os.path.exists(html_dir):
+            html_file = os.path.join(html_dir, f'page_{i+1}.json')
+            if os.path.exists(html_file):
+                try:
+                    with open(html_file, 'r', encoding='utf-8') as f:
+                        page_data = json.load(f)
+                    
+                    # Extract facts from page content
+                    facts = extract_facts_from_page(page_data, query)
+                    competitor_data['unique_facts'] = facts
+                    all_unique_facts.extend(facts)
+                    print(f"Extracted {len(facts)} facts from {result.get('url')}")
+                except Exception as e:
+                    print(f"Error extracting facts from {html_file}: {str(e)}")
+        
+        competitors.append(competitor_data)
     
     # Extract keyword information
     keywords = {
@@ -53,8 +74,41 @@ def extract_seo_insights(seo_data):
         'query': query,
         'competitors': competitors,
         'keywords': keywords,
-        'target_metrics': calculate_target_metrics(competitors)
+        'target_metrics': calculate_target_metrics(competitors),
+        'all_unique_facts': all_unique_facts
     }
+
+def extract_facts_from_page(page_data, query):
+    """Extract factual information from page content"""
+    facts = []
+    
+    # Extract facts from content sample if available
+    if 'content' in page_data and 'sample' in page_data['content']:
+        content = page_data['content']['sample']
+        
+        # Split content into sentences
+        sentences = re.split(r'(?<=[.!?])\s+', content)
+        
+        for sentence in sentences:
+            # Filter for sentences that likely contain facts
+            if any(fact_indicator in sentence.lower() for fact_indicator in ['is', 'are', 'was', 'were', 'has', 'have', 'can', 'will', 'should', 'percent', '%', 'study', 'research', 'according', 'survey', 'data']):
+                # Clean up the sentence
+                clean_sentence = sentence.strip()
+                if clean_sentence and len(clean_sentence) > 20 and clean_sentence not in facts:
+                    facts.append(clean_sentence)
+    
+    # Extract facts from headings
+    if 'headings' in page_data:
+        for heading_type in ['h1', 'h2', 'h3']:
+            if heading_type in page_data['headings']:
+                for heading in page_data['headings'][heading_type]:
+                    if any(fact_indicator in heading.lower() for fact_indicator in ['how', 'why', 'what', 'when', 'where', 'top', 'best', 'guide', 'tips', 'benefits']):
+                        if heading not in facts and len(heading) > 10:
+                            facts.append(heading)
+    
+    # Limit the number of facts to avoid overwhelming
+    return facts[:10]
+
 
 def extract_unique_features(result):
     """Extract unique features and facts from a competitor's page"""
@@ -877,6 +931,7 @@ def main(args=None):
         parser.add_argument('--template', default='advanced_blog_template.md', help='Path to the blog template file')
         parser.add_argument('--output', help='Path to save the generated blog post (default: blog_[query].md)')
         parser.add_argument('--ai-resistant', action='store_true', help='Generate content that is resistant to AI detection')
+        parser.add_argument('--html-dir', help='Directory containing extracted HTML content from competitor pages')
         args = parser.parse_args()
     
     # Handle both command line args and direct function calls
@@ -887,24 +942,34 @@ def main(args=None):
         template = 'advanced_blog_template.md'
         output = None
         ai_resistant = False
+        html_dir = None
         
         for i, arg in enumerate(args):
             if arg == '--template' and i+1 < len(args):
                 template = args[i+1]
             elif arg == '--output' and i+1 < len(args):
                 output = args[i+1]
+            elif arg == '--html-dir' and i+1 < len(args):
+                html_dir = args[i+1]
             elif arg == '--ai-resistant':
                 ai_resistant = True
     else:
         template = args.template
         output = args.output
+        html_dir = args.html_dir if hasattr(args, 'html_dir') else None
         ai_resistant = args.ai_resistant if hasattr(args, 'ai_resistant') else False
+        
+    # Log the HTML directory for debugging
+    if html_dir:
+        print(f"Using HTML extraction directory: {html_dir}")
+    else:
+        print("No HTML extraction directory provided, will rely on SERP data only")
     
     # Load SEO analysis
     seo_data = load_seo_analysis(input_file)
     
-    # Extract SEO insights
-    seo_insights = extract_seo_insights(seo_data)
+    # Extract SEO insights with HTML content if available
+    seo_insights = extract_seo_insights(seo_data, html_dir)
     
     # Generate variables for the template
     variables = generate_blog_variables(seo_insights)
