@@ -624,27 +624,38 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             generateBlog.addEventListener('click', function(event) {
-                const queryValue = document.getElementById('query').value; 
+                console.log("Generate Blog button clicked.");
+                const queryValue = document.getElementById('query').value;
+                console.log("Query value from #query input:", queryValue);
 
                 generateBlog.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
                 generateBlog.disabled = true;
 
                 if (!queryValue) {
+                    console.log("Preventing submission: queryValue is empty.");
                     event.preventDefault(); 
                     alert('Please perform a search first to provide a query for the blog.');
+                    generateBlog.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
+                    generateBlog.disabled = false;
                     return;
                 }
 
                 const hiddenQueryInput = blogForm.elements['query']; 
+                console.log("Found hidden input:", hiddenQueryInput);
                 
                 if (hiddenQueryInput) {
                     hiddenQueryInput.value = queryValue;
+                    console.log("Set hidden input value to:", queryValue);
                 } else {
+                    console.log("Preventing submission: hiddenQueryInput not found.");
                     event.preventDefault(); 
                     alert('Internal error: The blog query input field is missing from the form.');
+                    generateBlog.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
+                    generateBlog.disabled = false;
                     return;
                 }
 
+                console.log("Allowing default form submission.");
                 // DO NOT call event.preventDefault().
                 // Allow the default form submission to proceed.
             });
@@ -652,44 +663,34 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Secondary generate blog button in the AI content section
         if (generateBlogButton) {
-            generateBlogButton.addEventListener('click', function(e) {
-                e.preventDefault();
-                const query = document.getElementById('query').value;
-                if (!query) {
-                    alert('Please perform a search first');
-                    return;
-                }
-                
-                generateBlogButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
-                generateBlogButton.classList.add('disabled');
-                
-                fetch(`/generate_blog/${encodeURIComponent(query)}`, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json'
+            const blogFormTwo = generateBlogButton.form;
+            if (!blogFormTwo) {
+                console.error("Button id='generate-blog-button' not in a form.");
+            } else {
+                generateBlogButton.addEventListener('click', function(event) {
+                    const queryValue = document.getElementById('query').value;
+                    generateBlogButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+                    generateBlogButton.disabled = true;
+                    if (!queryValue) {
+                        event.preventDefault();
+                        alert('Please perform a search first.');
+                        generateBlogButton.innerHTML = '<i class="fas fa-magic"></i> Generate Blog';
+                        generateBlogButton.disabled = false;
+                        return;
                     }
-                })
-                .then(response => {
-                    if (response.redirected) {
-                        window.location.href = response.url;
+                    const hiddenQueryInputTwo = blogFormTwo.elements['query'];
+                    if (hiddenQueryInputTwo) {
+                        hiddenQueryInputTwo.value = queryValue;
                     } else {
-                        return response.json().catch(() => response.text());
+                        event.preventDefault();
+                        alert('Internal error: Blog query input 2 missing.');
+                        generateBlogButton.innerHTML = '<i class="fas fa-magic"></i> Generate Blog';
+                        generateBlogButton.disabled = false;
+                        return;
                     }
-                })
-                .then(data => {
-                    if (data && typeof data === 'object' && data.redirect) {
-                        window.location.href = data.redirect;
-                    } else {
-                        window.location.href = `/view_blog/${encodeURIComponent(query)}`;
-                    }
-                })
-                .catch(error => {
-                    console.error('Error generating blog:', error);
-                    alert('Error generating blog. Please try again.');
-                    generateBlogButton.innerHTML = '<i class="fas fa-blog"></i> Generate AI Blog';
-                    generateBlogButton.classList.remove('disabled');
+                    // Allow default form submission
                 });
-            });
+            }
         }
         
         // View blogs button
