@@ -37,26 +37,17 @@ class ProxyManager:
                     logger.info(f"Render env (sensitive): {key}={value}")
                 else:
                     logger.info(f"Render env: {key}={value}")
-            
-            # On Render, use the SOCKS5h proxy from environment variables if available
+                        # On Render, use the proxy from environment variables if available
             logger.info("Setting proxy configuration for Render environment")
             render_proxy = os.environ.get('ROTATING_PROXY_ENDPOINT')
             if render_proxy:
-                # Ensure the proxy URL from env var has the socks5h:// prefix if it's the Oxylabs proxy
-                if 'oxylabs.io' in render_proxy and not render_proxy.startswith('socks5h://'):
-                    # If it has another protocol, remove it
-                    if '://' in render_proxy:
-                        render_proxy = render_proxy.split('://', 1)[1]
-                    # Add socks5h:// prefix
-                    self.rotating_proxy_endpoint = f"socks5h://{render_proxy}"
-                    logger.info("Converted Oxylabs proxy to use SOCKS5h protocol")
-                else:
-                    self.rotating_proxy_endpoint = render_proxy
+                # Keep the proxy URL as is, don't modify the protocol
+                self.rotating_proxy_endpoint = render_proxy
                 logger.info("Using proxy from ROTATING_PROXY_ENDPOINT environment variable on Render")
             else:
-                # Fallback to hardcoded proxy if environment variable not set
-                self.rotating_proxy_endpoint = "socks5h://customer-pematthews41_5eo28-cc-us:Yitbos88++88@pr.oxylabs.io:7777"
-                logger.info("Using fallback hardcoded SOCKS5h proxy configuration on Render")
+                # Fallback to HTTP proxy if environment variable not set
+                self.rotating_proxy_endpoint = "http://customer-pematthews41_5eo28-cc-us:Yitbos88++88@pr.oxylabs.io:7777"
+                logger.info("Using fallback hardcoded HTTP proxy configuration on Render")
             return
         
         # For non-Render environments, try multiple environment variable names for the proxy
