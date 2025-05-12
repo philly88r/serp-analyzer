@@ -14,14 +14,20 @@ import md_to_html
 import glob
 import io
 import logging
+from logging.handlers import RotatingFileHandler
 
 # Configure logging to show DEBUG level messages
+log_file = os.path.join(os.path.dirname(__file__), 'serp_analyzer.log')
+log_formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]')
+log_handler = RotatingFileHandler(log_file, maxBytes=1024 * 1024 * 5, backupCount=2) # 5MB per file, 2 backups
+log_handler.setFormatter(log_formatter)
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('serp_analyzer.log')
+        log_handler
     ]
 )
 # Ensure third-party loggers don't overwhelm our logs
@@ -242,7 +248,7 @@ def index():
     # Sort results by timestamp (newest first)
     results.sort(key=lambda x: x['timestamp'], reverse=True)
     
-    return render_template('index.html', results=results, browser_automation_available=BROWSER_AUTOMATION_AVAILABLE)
+    return render_template('index.html', results=results, browser_automation_available=BROWSER_AUTOMATION_AVAILABLE, current_time=f"App Reloaded: {datetime.now().isoformat()}")
 
 @app.route('/search', methods=['POST'])
 def search():
@@ -383,486 +389,91 @@ def analyze(query):
     except Exception as e:
         flash(f'Error during analysis: {str(e)}', 'danger')
         return redirect(url_for('index'))
-
 @app.route('/generate_blog/', methods=['GET'])
 @app.route('/generate_blog/<query>', methods=['GET'])
 def generate_blog(query=None):
-    print(f"\n\n==== BLOG GENERATION REQUESTED ====\n")
-    print(f"Request method: {request.method}")
-    print(f"Request args: {request.args}")
-    print(f"Request form: {request.form}")
-    print(f"Request path: {request.path}")
-    print(f"Query parameter: {query}")
-    sys.stdout.flush()  # Force output to be written immediately
-    # If query is None, get it from the request parameters
+    # Direct file logging to ensure we capture this
+    try:
+        with open('blog_debug.log', 'a') as f:
+            f.write(f"\n\n[{datetime.now()}] ***** generate_blog FUNCTION ENTERED *****\n")
+    except Exception as e:
+        print(f"Error writing to debug log: {e}")
+        
+    app.logger.info("***** generate_blog FUNCTION ENTERED *****")
+    app.logger.info(f"\n\n==== BLOG GENERATION REQUESTED ====\n")
+    app.logger.info(f"Request method: {request.method}")
+    app.logger.info(f"Request args: {request.args}")
+    app.logger.info(f"Request form: {request.form}")
+    app.logger.info(f"Request path: {request.path}")
+    app.logger.info(f"Query parameter: {query}")
+    
+    # Get query from URL params or form submission
     if query is None:
         query = request.args.get('query')
-        print(f"Query from request args: {query}")
-        if not query:
-            print("ERROR: No query provided in request")
-            flash('Please provide a search query', 'danger')
-            return redirect(url_for('index'))
+        app.logger.info(f"Query from request args: {query}")
     else:
-        print(f"Query from URL parameter: {query}")
-    # Replace spaces with underscores for file operations
+        app.logger.info(f"Query from URL param: {query}")
+    
+    if not query:
+        flash('No query provided for blog generation.', 'warning')
+        app.logger.warning("No query provided, redirecting to index.")
+        return redirect(url_for('index'))
+    
     query_file = query.replace(' ', '_')
+    
+    # Ensure all required folders exist
+    for folder in [app.config['RESULTS_FOLDER'], app.config['ANALYSIS_FOLDER'], 
+                  app.config['BLOG_FOLDER'], app.config['HTML_REPORTS_FOLDER']]:
+        os.makedirs(folder, exist_ok=True)
+        app.logger.info(f"Ensured directory exists: {folder}")
+    
+    # Set environment variable for HTML_REPORTS_DIR to ensure generate_seo_blog.py can find it
+    os.environ['HTML_REPORTS_DIR'] = app.config['HTML_REPORTS_FOLDER']
+    app.logger.info(f"Set HTML_REPORTS_DIR environment variable to: {os.environ['HTML_REPORTS_DIR']}")
     
     # Check if SERP results exist
     serp_file = os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}.json')
+    app.logger.info(f"Looking for SERP file at: {serp_file}")
+    
     if not os.path.exists(serp_file):
         flash(f'SERP results for "{query}" not found', 'danger')
+        app.logger.warning(f"SERP file not found: {serp_file}. Redirecting to index.")
         return redirect(url_for('index'))
     
     try:
         # Generate blog post
         output_file = os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}.md')
+        app.logger.info(f"Attempting to generate blog for query: '{query}' using SERP file: {serp_file}")
         
-        # Pass the HTML reports directory directly to generate_seo_blog.main
-        # This will ensure HTML files are saved in the correct location
-        html_reports_dir = app.config['HTML_REPORTS_FOLDER']
-        
-        # Modify the environment to make the HTML reports directory available
-        os.environ['HTML_REPORTS_DIR'] = html_reports_dir
-        
-        # Check if we have extracted HTML content
+        # Set up arguments for generate_seo_blog.main
         html_extraction_dir = os.path.join(app.config['ANALYSIS_FOLDER'], f'html_{query_file}')
-        if not os.path.exists(html_extraction_dir):
-            print(f"HTML extraction directory not found: {html_extraction_dir}")
-            print("Running analysis to extract HTML content first...")
-            # Run the analyze function to extract HTML content
-            try:
-                # Clean up old analysis files
-                seo_analyzer.clean_all_directories()
-                
-                # Run SEO analysis
-                seo_analyzer.main(['--input', serp_file])
-                
-                # Extract and save HTML content for blog generation
-                print(f"Extracting HTML content for blog generation from {serp_file}")
-                # Load SERP results
-                with open(serp_file, 'r', encoding='utf-8') as f:
-                    serp_data = json.load(f)
-                
-                # Create HTML extraction directory if it doesn't exist
-                os.makedirs(html_extraction_dir, exist_ok=True)
-                
-                # Extract HTML content from each result
-                if 'results' in serp_data and serp_data['results']:
-                    for i, result in enumerate(serp_data['results']):
-                        if 'url' in result:
-                            try:
-                                # Use the analyze_page function to extract content
-                                page_data = analyze_page(result['url'])
-                                
-                                # Save the extracted content
-                                html_file = os.path.join(html_extraction_dir, f'page_{i+1}.json')
-                                with open(html_file, 'w', encoding='utf-8') as f:
-                                    json.dump(page_data, f, indent=2)
-                                
-                                print(f"Saved HTML content for {result['url']} to {html_file}")
-                            except Exception as page_error:
-                                print(f"Error extracting HTML from {result['url']}: {str(page_error)}")
-                    
-                    print(f"Successfully extracted HTML content from {len(serp_data['results'])} pages")
-                else:
-                    print("No results found in SERP data for HTML extraction")
-            except Exception as html_error:
-                print(f"Error during HTML extraction: {str(html_error)}")
+        if os.path.exists(html_extraction_dir):
+            app.logger.info(f"HTML extraction directory found: {html_extraction_dir}")
         else:
-            print(f"Found existing HTML extraction directory: {html_extraction_dir}")
+            app.logger.info(f"HTML extraction directory not found: {html_extraction_dir}")
+            
+        # Call the main generation script with explicit arguments
+        blog_result = generate_seo_blog.main(query=query)
         
-        # Pass the HTML extraction directory to generate_seo_blog.main
-        os.environ['HTML_EXTRACTION_DIR'] = html_extraction_dir
-        
-        # Use the updated generate_seo_blog.main function
-        result = generate_seo_blog.main([serp_file, '--output', output_file, '--html-dir', html_extraction_dir])
-        
-        # Log the result for debugging
-        print(f"Blog generation result: {result}")
-        
-        # Verify the HTML file exists
-        if 'html_output_file' in result and result['html_output_file']:
-            html_file = result['html_output_file']
-            if os.path.exists(html_file):
-                print(f"HTML file successfully generated at: {html_file}")
-            else:
-                print(f"Warning: HTML file not found at expected location: {html_file}")
-                # Fallback to the old method
-                html_file = md_to_html.convert_md_to_html(output_file, html_reports_dir)
-                print(f"Used fallback HTML generation: {html_file}")
+        if blog_result and 'output_file' in blog_result:
+            app.logger.info(f"Blog generation successful. Output file: {blog_result['output_file']}")
+            app.logger.info(f"HTML output file: {blog_result.get('html_output_file', 'None')}")
         else:
-            # Fallback to the old method if for some reason the HTML file wasn't generated
-            html_file = md_to_html.convert_md_to_html(output_file, html_reports_dir)
-            print(f"Used fallback HTML generation: {html_file}")
+            app.logger.info("Blog generation completed but no output file information returned")
+            
+        # Redirect to the index page with a success message
+        flash(f'Blog for "{query}" generated successfully!', 'success')
+        app.logger.info(f"Redirecting to index with success message for query: '{query}'")
         
-        flash(f'Successfully generated blog post for "{query}" with automatic HTML output', 'success')
-        return redirect(url_for('view_blog', query=query))
-    
+        # Use the Memory pattern: Render index with context
+        return render_template('index.html',
+                               results=get_existing_results_and_blogs(),
+                               blog_generated_query=query)  # Pass the query
+        
     except Exception as e:
         flash(f'Error generating blog: {str(e)}', 'danger')
+        app.logger.error(f"Error during blog generation for query '{query}': {e}", exc_info=True)
         return redirect(url_for('index'))
-
-@app.route('/view_results/<query>')
-def view_results(query):
-    # Replace spaces with underscores for file operations
-    query_file = query.replace(' ', '_')
-    
-    try:
-        # Check if SERP results exist
-        serp_file = os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}.json')
-        
-        # Make sure the results directory exists
-        os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
-        
-        if not os.path.exists(serp_file):
-            # Try to find any file that might match the query (partial match)
-            potential_files = glob.glob(os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}*.json'))
-            if potential_files:
-                serp_file = potential_files[0]  # Use the first matching file
-            else:
-                flash(f'SERP results for "{query}" not found', 'danger')
-                return redirect(url_for('index'))
-        
-        # Load SERP results
-        with open(serp_file, 'r', encoding='utf-8') as f:
-            serp_data = json.load(f)
-        
-        return render_template('results.html', query=query, serp_data=serp_data)
-    except Exception as e:
-        flash(f'Error viewing results for "{query}": {str(e)}', 'danger')
-        return redirect(url_for('index'))
-
-@app.route('/view_analysis/<query>')
-def view_analysis(query):
-    # Replace spaces with underscores for file operations
-    query_file = query.replace(' ', '_')
-    
-    try:
-        # Make sure directories exist
-        os.makedirs(app.config['ANALYSIS_FOLDER'], exist_ok=True)
-        os.makedirs(app.config['HTML_REPORTS_FOLDER'], exist_ok=True)
-        
-        # Find analysis file
-        analysis_file = None
-        if os.path.exists(app.config['ANALYSIS_FOLDER']):
-            for file in os.listdir(app.config['ANALYSIS_FOLDER']):
-                if file.startswith(f'seo_comparative_analysis_{query_file}_') and file.endswith('.md'):
-                    analysis_file = os.path.join(app.config['ANALYSIS_FOLDER'], file)
-                    break
-        
-        if not analysis_file:
-            flash(f'SEO analysis for "{query}" not found', 'danger')
-            return redirect(url_for('index'))
-        
-        # Load analysis content
-        with open(analysis_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-        # Parse Markdown Content into Sections
-        sections = []
-        parts = re.split(r'^## +(.*?) *$\n', content, flags=re.MULTILINE)
-        
-        current_title = "Introduction" 
-        current_content = parts[0].strip()
-        sections.append({'title': current_title, 'content': current_content})
-        
-        for i in range(1, len(parts), 2):
-            title = parts[i].strip()
-            markdown_content = parts[i+1].strip() if (i+1) < len(parts) else ""
-            sections.append({'title': title, 'content': markdown_content})
-        
-        # Find HTML version if it exists
-        html_file = None
-        base_name = os.path.basename(analysis_file)
-        html_name = os.path.splitext(base_name)[0] + '.html'
-        html_path = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_name)
-        
-        if os.path.exists(html_path):
-            html_file = html_path
-        else:
-            # Generate HTML if it doesn't exist
-            try:
-                md_to_html.convert_md_to_html(analysis_file, app.config['HTML_REPORTS_FOLDER'])
-                if os.path.exists(html_path):
-                    html_file = html_path
-            except Exception as e:
-                print(f"Error generating HTML: {str(e)}")
-        
-        return render_template('analysis.html', query=query, sections=sections, html_file=html_file)
-    except Exception as e:
-        flash(f'Error viewing analysis for "{query}": {str(e)}', 'danger')
-        return redirect(url_for('index'))
-    
-
-@app.route('/view_blog/', methods=['GET'])
-@app.route('/view_blog/<query>', methods=['GET'])
-def view_blog(query=None):
-    # If query is None, get it from the request parameters
-    if query is None:
-        query = request.args.get('query')
-        if not query:
-            flash('Please provide a search query', 'danger')
-            return redirect(url_for('index'))
-    # Replace spaces with underscores for file operations
-    query_file = query.replace(' ', '_')
-    
-    try:
-        # Make sure directories exist
-        os.makedirs(app.config['BLOG_FOLDER'], exist_ok=True)
-        os.makedirs(app.config['HTML_REPORTS_FOLDER'], exist_ok=True)
-        
-        # Check if blog exists
-        blog_file = os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}.md')
-        
-        # Try to find any matching blog file if exact match not found
-        if not os.path.exists(blog_file):
-            potential_files = glob.glob(os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}*.md'))
-            if potential_files:
-                blog_file = potential_files[0]  # Use the first matching file
-            else:
-                flash(f'Blog post for "{query}" not found', 'danger')
-                return redirect(url_for('index'))
-        
-        # Load blog content
-        with open(blog_file, 'r', encoding='utf-8') as f:
-            blog_content = f.read()
-        
-        # Find HTML version if it exists
-        html_file = None
-        base_name = os.path.basename(blog_file)
-        html_name = base_name.replace('.md', '.html')
-        html_path = os.path.join(app.config['HTML_REPORTS_FOLDER'], html_name)
-        
-        if os.path.exists(html_path):
-            # Create a URL path for the HTML file instead of a file system path
-            html_file = url_for('serve_html_report', filename=html_name)
-        else:
-            # Convert to HTML if not exists
-            try:
-                generated_html_path = md_to_html.convert_md_to_html(blog_file, app.config['HTML_REPORTS_FOLDER'])
-                if generated_html_path:
-                    html_file = url_for('serve_html_report', filename=html_name)
-            except Exception as e:
-                print(f"Error generating HTML: {str(e)}")
-        
-        return render_template('blog.html', query=query, blog_content=blog_content, html_file=html_file)
-    except Exception as e:
-        flash(f'Error viewing blog for "{query}": {str(e)}', 'danger')
-        return redirect(url_for('index'))
-
-@app.route('/download/<file_type>/<query>')
-def download(file_type, query):
-    """Handles downloading of results or analysis files."""
-    query_safe = query.replace(' ', '_')
-    
-    if file_type == 'results':
-        results_dir = get_results_dir()
-        potential_files = glob.glob(os.path.join(results_dir, f"serp_{query_safe}*.json"))
-        if not potential_files:
-            flash(f'No results file found for query: {query}', 'danger')
-            return redirect(url_for('index'))
-        
-        latest_file = max(potential_files, key=os.path.getctime)
-        
-        try:
-            # Load the JSON data
-            with open(latest_file, 'r', encoding='utf-8') as f:
-                results_data = json.load(f)
-            
-            # Render the results.html template with the data
-            html_content = render_template('results.html', query=query, serp_data=results_data)
-            
-            # Create an in-memory file
-            buffer = io.BytesIO()
-            buffer.write(html_content.encode('utf-8'))
-            buffer.seek(0)
-            
-            # Send the rendered HTML as a downloadable file
-            return send_file(
-                buffer,
-                as_attachment=True,
-                download_name=f"serp_results_{query_safe}.html",
-                mimetype='text/html'
-            )
-
-        except Exception as e:
-            logging.error(f"Error generating HTML download for results {query}: {e}")
-            flash(f'Error generating HTML download for results: {e}', 'danger')
-            return redirect(url_for('view_results', query=query))
-        
-    elif file_type == 'analysis':
-        analysis_dir = get_analysis_dir()
-        # Find the latest MD analysis file for the query
-        potential_files = glob.glob(os.path.join(analysis_dir, f"seo_comparative_analysis_{query_safe}*.md"))
-        if not potential_files:
-            flash(f'No analysis file found for query: {query}', 'danger')
-            return redirect(url_for('index'))
-        latest_file = max(potential_files, key=os.path.getctime)
-        return send_file(latest_file, as_attachment=True)
-        
-    elif file_type == 'analysis_html':
-        html_report_dir = get_html_report_dir()
-        # Find the latest HTML analysis file for the query
-        potential_files = glob.glob(os.path.join(html_report_dir, f"seo_comparative_analysis_{query_safe}*.html"))
-        if not potential_files:
-            flash(f'No HTML analysis report found for query: {query}', 'danger')
-            # Try redirecting to the analysis page where they might generate it?
-            # Or maybe just redirect to index if it should always exist?
-            return redirect(url_for('view_analysis', query=query))
-        latest_file = max(potential_files, key=os.path.getctime)
-        return send_file(latest_file, as_attachment=True)
-        
-    elif file_type == 'blog':
-        blog_dir = get_blog_dir()
-        # Find the latest MD blog file for the query
-        potential_files = glob.glob(os.path.join(blog_dir, f"blog_{query_safe}.md"))
-        if not potential_files:
-            flash(f'No blog post found for query: {query}', 'danger')
-            return redirect(url_for('index'))
-        latest_file = max(potential_files, key=os.path.getctime)
-        return send_file(latest_file, as_attachment=True)
-        
-    elif file_type == 'html_blog':
-        blog_dir = get_blog_dir()
-        # Find the latest HTML blog file for the query
-        potential_files = glob.glob(os.path.join(app.config['HTML_REPORTS_FOLDER'], f"blog_{query_safe}.html"))
-        if not potential_files:
-            flash(f'No HTML blog post found for query: {query}', 'danger')
-            # Try redirecting to the blog page where they might generate it?
-            # Or maybe just redirect to index if it should always exist?
-            return redirect(url_for('view_blog', query=query))
-        latest_file = max(potential_files, key=os.path.getctime)
-        return send_file(latest_file, as_attachment=True)
-    
-    else:
-        flash('Invalid file type', 'danger')
-        return redirect(url_for('index'))
-
-@app.route('/delete/<query>')
-def delete(query):
-    # Replace spaces with underscores for file operations
-    query_file = query.replace(' ', '_')
-    
-    # Delete SERP results
-    serp_file = os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}.json')
-    if os.path.exists(serp_file):
-        os.remove(serp_file)
-    
-    serp_csv = os.path.join(app.config['RESULTS_FOLDER'], f'serp_{query_file}.csv')
-    if os.path.exists(serp_csv):
-        os.remove(serp_csv)
-    
-    # Delete analysis files
-    for file in os.listdir(app.config['ANALYSIS_FOLDER']):
-        if query_file in file:
-            os.remove(os.path.join(app.config['ANALYSIS_FOLDER'], file))
-    
-    # Delete blog files
-    blog_file = os.path.join(app.config['BLOG_FOLDER'], f'blog_{query_file}.md')
-    if os.path.exists(blog_file):
-        os.remove(blog_file)
-    
-    # Delete HTML files
-    for file in os.listdir(app.config['HTML_REPORTS_FOLDER']):
-        if query_file in file:
-            os.remove(os.path.join(app.config['HTML_REPORTS_FOLDER'], file))
-    
-    flash(f'Successfully deleted all files for "{query}"', 'success')
-    return redirect(url_for('index'))
-
-# ===========================
-# API Endpoints
-# ===========================
-
-@app.route('/api/debug/<path:filename>')
-def serve_debug_file(filename):
-    """
-    Serve debug files (screenshots, HTML) for inspection.
-    This is useful for debugging CAPTCHA and other issues on Render.
-    """
-    # Security check to prevent directory traversal
-    if '..' in filename or filename.startswith('/'):
-        return jsonify({"error": "Invalid filename"}), 400
-        
-    # Set the debug directory - try multiple possible locations
-    possible_debug_dirs = [
-        os.path.join(app.root_path, 'debug'),
-        os.path.join(os.getcwd(), 'debug'),
-        '/app/debug',  # Render specific path
-        './debug'
-    ]
-    
-    # Try to find the file in any of the possible debug directories
-    for debug_dir in possible_debug_dirs:
-        file_path = os.path.join(debug_dir, filename)
-        if os.path.exists(file_path):
-            break
-    else:
-        # File not found in any directory
-        return jsonify({"error": "File not found", "searched_paths": possible_debug_dirs}), 404
-        
-    # Log the file path for debugging
-    logger.info(f"Serving debug file: {file_path}")
-    
-    # Determine the content type based on file extension
-    if filename.endswith('.png'):
-        return send_file(file_path, mimetype='image/png')
-    elif filename.endswith('.html'):
-        return send_file(file_path, mimetype='text/html')
-    else:
-        return send_file(file_path)
-
-@app.route('/api/debug/list')
-def list_debug_files():
-    """
-    List all debug files available for inspection.
-    """
-    # Check multiple possible debug directories
-    possible_debug_dirs = [
-        os.path.join(app.root_path, 'debug'),
-        os.path.join(os.getcwd(), 'debug'),
-        '/app/debug',  # Render specific path
-        './debug'
-    ]
-    
-    # Log which directories we're checking
-    logger.info(f"Checking debug directories: {possible_debug_dirs}")
-    
-    # Get all files from all possible debug directories
-    files = []
-    for debug_dir in possible_debug_dirs:
-        # Create the directory if it doesn't exist
-        if not os.path.exists(debug_dir):
-            try:
-                os.makedirs(debug_dir, exist_ok=True)
-                logger.info(f"Created debug directory: {debug_dir}")
-            except Exception as e:
-                logger.warning(f"Could not create debug directory {debug_dir}: {str(e)}")
-                continue
-        
-        try:
-            # Get all files in this debug directory
-            for filename in os.listdir(debug_dir):
-                file_path = os.path.join(debug_dir, filename)
-                if os.path.isfile(file_path):
-                    # Get file info
-                    file_info = {
-                        "name": filename,
-                        "directory": debug_dir,
-                        "size": os.path.getsize(file_path),
-                        "modified": datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat(),
-                        "url": f"/api/debug/{filename}"
-                    }
-                    files.append(file_info)
-            
-            logger.info(f"Found {len(files)} files in {debug_dir}")
-        except Exception as e:
-            logger.warning(f"Error listing files in {debug_dir}: {str(e)}")
-    
-    # Sort by modification time (newest first)
-    files.sort(key=lambda x: x["modified"], reverse=True)
-    
-    return jsonify({"files": files})
 
 
 @app.route('/api/proxy/status', methods=['GET'])
@@ -972,12 +583,58 @@ def api_get_analysis(query):
         logging.error(f"Error reading analysis file {latest_file} for API: {e}")
         return jsonify({'error': 'Could not read analysis file'}), 500
 
+@app.route('/view_blog/', methods=['GET'])
+@app.route('/view_blog/<query>', methods=['GET'])
+def view_blog(query=None):
+    """View the generated blog post for a specific query."""
+    # Get query from URL params if not provided in the route
+    if query is None:
+        query = request.args.get('query')
+        
+    if not query:
+        flash('No query provided for blog viewing.', 'warning')
+        return redirect(url_for('index'))
+    
+    query_safe = query.replace(' ', '_')
+    blog_dir = get_blog_dir()
+    
+    # Look for the blog file
+    potential_files = glob.glob(os.path.join(blog_dir, f"blog_{query_safe}.md"))
+    
+    if not potential_files:
+        flash(f'No blog post found for "{query}".', 'warning')
+        return redirect(url_for('index'))
+    
+    # Get the latest blog file
+    latest_file = max(potential_files, key=os.path.getctime)
+    
+    try:
+        # Read the blog content
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            blog_content = f.read()
+        
+        # Check if there's an HTML version
+        html_report_dir = get_html_report_dir()
+        html_file = os.path.join(html_report_dir, f"blog_{query_safe}.html")
+        html_file_url = None
+        
+        if os.path.exists(html_file):
+            html_file_url = url_for('serve_html_report', filename=f"blog_{query_safe}.html")
+        
+        # Render the blog template
+        return render_template('blog.html', query=query, blog_content=blog_content, html_file=html_file_url)
+    
+    except Exception as e:
+        app.logger.error(f"Error reading blog file {latest_file}: {e}", exc_info=True)
+        flash(f'Error reading blog file: {str(e)}', 'danger')
+        return redirect(url_for('index'))
+
 @app.route('/api/blog/<query>', methods=['GET'])
 def api_get_blog(query):
     """API endpoint to get the latest blog Markdown content for a query."""
     query_safe = query.replace(' ', '_')
     blog_dir = get_blog_dir()
-    potential_files = glob.glob(os.path.join(blog_dir, f"blog_{query_safe}*.md"))
+    potential_files = glob.glob(os.path.join(blog_dir, f"blog_{query_safe}.md"))
     
     if not potential_files:
         return jsonify({'error': f'No blog post found for query: {query}'}), 404

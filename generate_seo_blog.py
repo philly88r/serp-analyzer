@@ -81,10 +81,10 @@ def extract_seo_insights(seo_data, html_dir=None):
 def extract_facts_from_page(page_data, query):
     """Extract factual information from page content using AI"""
     try:
-        # Check if Gemini API key is available
-        gemini_api_key = os.environ.get('GEMINI_API_KEY')
-        if not gemini_api_key:
-            print("Warning: GEMINI_API_KEY not found in environment variables. Falling back to rule-based extraction.")
+        # Use the GEMINI_API_KEY imported from api_config.py
+        # This should be set in the Render environment variables
+        if not GEMINI_API_KEY:
+            print("Warning: GEMINI_API_KEY not available. Falling back to rule-based extraction.")
             return extract_facts_rule_based(page_data, query)
         
         # Prepare content for AI processing
@@ -126,9 +126,8 @@ def extract_facts_from_page(page_data, query):
         FACTS:
         """
         
-        # Call Gemini API
+        # Call Gemini API using the flash preview model for faster responses
         import requests
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
         headers = {
             "Content-Type": "application/json",
         }
@@ -142,24 +141,48 @@ def extract_facts_from_page(page_data, query):
             }
         }
         
+        # Use GEMINI_FLASH_API_URL which already includes the API key
         response = requests.post(
-            f"{url}?key={gemini_api_key}",
+            GEMINI_FLASH_API_URL,
             headers=headers,
-            json=data
+            json=data,
+            timeout=30  # Add a timeout to prevent hanging
         )
         
         if response.status_code == 200:
-            result = response.json()
-            if 'candidates' in result and len(result['candidates']) > 0:
-                text = result['candidates'][0]['content']['parts'][0]['text']
-                # Extract facts from the response
-                facts = [line.strip() for line in text.split('\n') if line.strip() and not line.strip().startswith('FACT') and len(line.strip()) > 20]
-                print(f"AI extracted {len(facts)} facts from content")
-                return facts[:10]  # Limit to 10 facts
+            try:
+                result = response.json()
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    text = result['candidates'][0]['content']['parts'][0]['text']
+                    # Extract facts from the response
+                    facts = [line.strip() for line in text.split('\n') if line.strip() and not line.strip().startswith('FACT') and len(line.strip()) > 20]
+                    print(f"AI extracted {len(facts)} facts from content")
+                    return facts[:10]  # Limit to 10 facts
+                else:
+                    print(f"Warning: No candidates found in Gemini API response: {result}")
+            except KeyError as ke:
+                print(f"Warning: Unexpected Gemini API response format: {result}. Error: {ke}")
+            except Exception as e:
+                print(f"Warning: Error processing Gemini API response: {str(e)}")
+        elif response.status_code == 401:
+            print("Error: Invalid Gemini API key. Please check your API key configuration.")
+        elif response.status_code == 429:
+            print("Error: Gemini API rate limit exceeded. Please try again later.")
+        else:
+            try:
+                error_details = response.json()
+                print(f"Warning: AI fact extraction failed with status {response.status_code}. Details: {error_details}")
+            except:
+                print(f"Warning: AI fact extraction failed with status {response.status_code}. Response: {response.text}")
         
-        print(f"Warning: AI fact extraction failed with status {response.status_code}. Falling back to rule-based extraction.")
         return extract_facts_rule_based(page_data, query)
     
+    except requests.Timeout:
+        print("Error: Gemini API request timed out. Falling back to rule-based extraction.")
+        return extract_facts_rule_based(page_data, query)
+    except requests.RequestException as e:
+        print(f"Error: Network error during Gemini API call: {str(e)}. Falling back to rule-based extraction.")
+        return extract_facts_rule_based(page_data, query)
     except Exception as e:
         print(f"Error in AI fact extraction: {str(e)}. Falling back to rule-based extraction.")
         return extract_facts_rule_based(page_data, query)
@@ -1040,73 +1063,145 @@ def convert_markdown_to_html(markdown_content):
 
 def save_blog_post(content, output_file, save_html=True, html_dir=None):
     """Save the generated blog post to a file"""
-    # Save markdown version
+    # Ensure blog directory exists
+    blog_dir = os.path.dirname(output_file)
+    if blog_dir and not os.path.exists(blog_dir):
+        os.makedirs(blog_dir, exist_ok=True)
+        print(f"Created blog directory: {blog_dir}")
+    
+    # Save markdown content
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(content)
-    print(f"Blog post saved to {output_file}")
+    print(f"Saved blog post to {output_file}")
     
-    # Also save as HTML if requested
+    # Save HTML version if requested
+    html_output_file = None
     if save_html:
-        # Get the base filename without path
-        base_filename = os.path.basename(output_file)
-        html_filename = os.path.splitext(base_filename)[0] + '.html'
-        
-        # If html_dir is specified, save HTML there, otherwise save next to markdown file
-        if html_dir:
-            os.makedirs(html_dir, exist_ok=True)
-            html_output_file = os.path.join(html_dir, html_filename)
-        else:
-            html_output_file = os.path.splitext(output_file)[0] + '.html'
-        
+        # Convert markdown to HTML
         html_content = convert_markdown_to_html(content)
-        with open(html_output_file, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        print(f"HTML version saved to {html_output_file}")
         
-        return html_output_file
+        # Try to get HTML directory from environment variable if not provided
+        if not html_dir:
+            html_dir = os.environ.get('HTML_REPORTS_DIR')
+            if html_dir:
+                print(f"Using HTML directory from environment variable: {html_dir}")
+        
+        # Determine HTML output file path
+        if html_dir:
+            # Make sure the HTML directory exists
+            try:
+                os.makedirs(html_dir, exist_ok=True)
+                print(f"Ensured HTML directory exists: {html_dir}")
+                
+                # Use the HTML directory with the same filename but .html extension
+                html_output_file = os.path.join(html_dir, os.path.basename(output_file).replace('.md', '.html'))
+            except Exception as e:
+                print(f"Error creating HTML directory {html_dir}: {str(e)}")
+                # Fallback to saving in the same directory as the markdown file
+                html_output_file = output_file.replace('.md', '.html')
+                print(f"Falling back to saving HTML in same directory: {html_output_file}")
+        else:
+            # Save in the same directory as the markdown file
+            html_output_file = output_file.replace('.md', '.html')
+            print(f"No HTML directory specified, saving to: {html_output_file}")
+        
+        # Save HTML content
+        try:
+            with open(html_output_file, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            print(f"Saved HTML version to {html_output_file}")
+        except Exception as e:
+            print(f"Error saving HTML file to {html_output_file}: {str(e)}")
+            # Try one more fallback location
+            fallback_html = os.path.join(os.path.dirname(output_file), os.path.basename(output_file).replace('.md', '.html'))
+            try:
+                with open(fallback_html, 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+                html_output_file = fallback_html
+                print(f"Saved HTML version to fallback location: {fallback_html}")
+            except Exception as e2:
+                print(f"Failed to save HTML even at fallback location: {str(e2)}")
     
-    return None
+    return html_output_file
 
 def main(args=None):
     if args is None:
-        parser = argparse.ArgumentParser(description='Generate SEO-optimized blog posts from SEO analysis')
-        parser.add_argument('input_file', help='Path to the JSON file containing SEO analysis')
-        parser.add_argument('--template', default='advanced_blog_template.md', help='Path to the blog template file')
-        parser.add_argument('--output', help='Path to save the generated blog post (default: blog_[query].md)')
-        parser.add_argument('--ai-resistant', action='store_true', help='Generate content that is resistant to AI detection')
-        parser.add_argument('--html-dir', help='Directory containing extracted HTML content from competitor pages')
-        args = parser.parse_args()
+        args = sys.argv[1:]
     
-    # Handle both command line args and direct function calls
-    input_file = args[0] if isinstance(args, list) else args.input_file
-    
-    if isinstance(args, list):
-        # Parse command line style arguments from list
-        template = 'advanced_blog_template.md'
-        output = None
-        ai_resistant = False
-        html_dir = None
+    # Check if args is a list (command line) or a string (query)
+    if isinstance(args, str):
+        query = args
+        # Construct paths based on query
+        query_file = query.replace(' ', '_')
         
-        for i, arg in enumerate(args):
-            if arg == '--template' and i+1 < len(args):
+        # Determine the results folder path
+        results_folder = os.environ.get('RESULTS_FOLDER', 'results')
+        input_file = os.path.join(results_folder, f"serp_{query_file}.json")
+        
+        # Log the paths for debugging
+        print(f"Query: {query}")
+        print(f"Results folder: {results_folder}")
+        print(f"Input file path: {input_file}")
+        
+        # Check if the input file exists
+        if not os.path.exists(input_file):
+            print(f"ERROR: SERP file not found at {input_file}")
+            # Try to find any file that might match
+            potential_files = glob.glob(os.path.join(results_folder, f"serp_{query_file}*.json"))
+            if potential_files:
+                input_file = potential_files[0]
+                print(f"Found alternative SERP file: {input_file}")
+            else:
+                print(f"No matching SERP files found in {results_folder}")
+                return {"error": f"SERP results for '{query}' not found"}
+        
+        # Set default template and other parameters
+        template = "dynamic_blog_template.md"
+        output = None
+        
+        # Try to find HTML extraction directory
+        analysis_folder = os.environ.get('ANALYSIS_FOLDER', 'analysis')
+        html_dir = os.path.join(analysis_folder, f"html_{query_file}")
+        if os.path.exists(html_dir):
+            print(f"Found HTML extraction directory: {html_dir}")
+        else:
+            print(f"HTML extraction directory not found at {html_dir}")
+            html_dir = None
+            
+        ai_resistant = False
+    elif len(args) >= 1 and not args[0].startswith('-'):
+        # First argument is the input file
+        input_file = args[0]
+        template = "dynamic_blog_template.md"
+        output = None
+        html_dir = None
+        ai_resistant = False
+        
+        # Parse additional arguments
+        for i, arg in enumerate(args[1:]):
+            if arg == '--template' and i+1 < len(args)-1:
                 template = args[i+1]
-            elif arg == '--output' and i+1 < len(args):
+            elif arg == '--output' and i+1 < len(args)-1:
                 output = args[i+1]
-            elif arg == '--html-dir' and i+1 < len(args):
+            elif arg == '--html-dir' and i+1 < len(args)-1:
                 html_dir = args[i+1]
             elif arg == '--ai-resistant':
                 ai_resistant = True
     else:
+        # Parse arguments using argparse
+        parser = argparse.ArgumentParser(description='Generate an SEO blog post from SERP analysis')
+        parser.add_argument('input', help='Input JSON file with SERP analysis')
+        parser.add_argument('--template', default='dynamic_blog_template.md', help='Blog template file')
+        parser.add_argument('--output', help='Output file for the blog post')
+        parser.add_argument('--html-dir', help='Directory containing extracted HTML content')
+        parser.add_argument('--ai-resistant', action='store_true', help='Make content resistant to AI detection')
+        args = parser.parse_args(args)
+        
+        input_file = args.input
         template = args.template
         output = args.output
         html_dir = args.html_dir if hasattr(args, 'html_dir') else None
         ai_resistant = args.ai_resistant if hasattr(args, 'ai_resistant') else False
-        
-    # Log the HTML directory for debugging
-    if html_dir:
-        print(f"Using HTML extraction directory: {html_dir}")
-    else:
-        print("No HTML extraction directory provided, will rely on SERP data only")
     
     # Load SEO analysis
     seo_data = load_seo_analysis(input_file)
