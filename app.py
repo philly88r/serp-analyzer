@@ -388,6 +388,12 @@ def analyze(query):
 @app.route('/generate_blog/<query>', methods=['GET'])
 def generate_blog(query=None):
     print(f"\n\n==== BLOG GENERATION REQUESTED ====\n")
+    print(f"Request method: {request.method}")
+    print(f"Request args: {request.args}")
+    print(f"Request form: {request.form}")
+    print(f"Request path: {request.path}")
+    print(f"Query parameter: {query}")
+    sys.stdout.flush()  # Force output to be written immediately
     # If query is None, get it from the request parameters
     if query is None:
         query = request.args.get('query')
