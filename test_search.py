@@ -1,14 +1,21 @@
 import asyncio
-from serp_analyzer import SerpAnalyzer
+import os
+import time
+from bypass_serp import BypassSerpAnalyzer
 
 async def test_search():
-    print("Initializing SerpAnalyzer...")
-    analyzer = SerpAnalyzer(headless=True)
+    print("Initializing BypassSerpAnalyzer...")
+    analyzer = BypassSerpAnalyzer(headless=True)
     
-    query = "coffee"
+    # Create debug directory if it doesn't exist
+    os.makedirs("debug", exist_ok=True)
+    
+    # Try a query that might trigger CAPTCHA
+    query = "best coffee shops in new york"
     print(f"Searching for: {query}")
     
-    results = await analyzer.search_google(query, 3)
+    # Run the search
+    results = await analyzer.search_google(query, 6)
     
     if results is None:
         print("Search returned None instead of a list")
