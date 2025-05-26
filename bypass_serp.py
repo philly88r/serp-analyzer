@@ -131,6 +131,34 @@ class BypassSerpAnalyzer:
         
         self.last_request_time = time.time()
     
+    def _rotate_proxy(self, force=False):
+        """
+        Attempts to rotate the proxy by reloading the configuration.
+        """
+        logger.info(f"Proxy rotation requested (force={force}). Reloading proxy configuration.")
+        # proxy_manager is the global instance from proxy_manager.py
+        # This assumes 'proxy_manager' is available in the global scope of this file
+        # or imported appropriately.
+        proxy_manager.load_config()
+        new_proxy = proxy_manager.get_proxy()
+        if new_proxy:
+            display_proxy = new_proxy
+            if "@" in new_proxy and "://" in new_proxy:
+                try:
+                    protocol_part, rest = new_proxy.split("://", 1)
+                    credentials_part, host_part = rest.split("@", 1)
+                    display_proxy = f"{protocol_part}://*****@{host_part}"
+                except ValueError:
+                    # If splitting fails (e.g., unexpected format), log a generic masked version
+                    display_proxy = "proxy_details_masked_due_to_format"
+            elif "://" in new_proxy: # No credentials, just scheme and host
+                display_proxy = new_proxy
+            else: # Completely unexpected format
+                 display_proxy = "proxy_details_masked_due_to_unknown_format"
+            logger.info(f"Proxy manager reloaded. Current proxy endpoint: {display_proxy}")
+        else:
+            logger.warning("Proxy manager reloaded, but no proxy endpoint is configured.")
+
     async def search_google(self, query, num_results=6):
         """
         Search Google for a query and return the results.
