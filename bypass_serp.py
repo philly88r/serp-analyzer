@@ -163,6 +163,7 @@ class BypassSerpAnalyzer:
         """
         Search Google for a query and return the results.
         Uses multiple methods to bypass anti-bot detection.
+        If Google is blocked, falls back to alternative search engines.
         
         Args:
             query (str): The search query
@@ -177,6 +178,9 @@ class BypassSerpAnalyzer:
             # Reset captcha detection
             self.captcha_detected = False
             
+            # Track consecutive CAPTCHA/block counts for adaptive fallback
+            consecutive_blocks = 0
+            
             # Try multiple methods with retries
             for attempt in range(self.max_retries):
                 if attempt > 0:
@@ -185,38 +189,81 @@ class BypassSerpAnalyzer:
                     delay = 5 + (attempt * 5) + random.uniform(1.0, 5.0)
                     logger.info(f"Waiting {delay:.2f} seconds before retry")
                     await asyncio.sleep(delay)
+                    
+                    # Rotate proxy on each retry
+                    self._rotate_proxy(force=True)
                 
                 # Method 1: Try using Playwright for Google search
                 try:
-                    results = await self._search_with_playwright(query, num_results)
-                    
-                    if results and len(results) > 0:
-                        logger.info(f"Playwright Google search returned {len(results)} results")
-                        return results
+                    playwright_results = await self._search_with_playwright(query, num_results)
+                    if playwright_results:
+                        logger.info("Successfully retrieved results using Playwright")
+                        return playwright_results
+                    if self.captcha_detected:
+                        logger.warning("CAPTCHA detected during Playwright search, trying alternative methods")
+                        consecutive_blocks += 1
                 except Exception as e:
-                    logger.error(f"Playwright search failed: {str(e)}")
-                    logger.info("Falling back to other search methods")
+                    logger.error(f"Error in Playwright search: {str(e)}")
+                    if "captcha" in str(e).lower() or "blocked" in str(e).lower():
+                        consecutive_blocks += 1
                 
-                # Method 2: Try using a direct HTTP request to Google
-                results = await self._search_with_direct_http(query, num_results)
+                # Method 2: Try direct HTTP request if Playwright failed
+                try:
+                    http_results = await self._search_with_direct_http(query, num_results)
+                    if http_results:
+                        logger.info("Successfully retrieved results using direct HTTP request")
+                        return http_results
+                    if self.captcha_detected:
+                        consecutive_blocks += 1
+                except Exception as e:
+                    logger.error(f"Error in direct HTTP search: {str(e)}")
+                    if "captcha" in str(e).lower() or "blocked" in str(e).lower():
+                        consecutive_blocks += 1
                 
-                if results and len(results) > 0:
-                    logger.info(f"Direct HTTP request returned {len(results)} results")
-                    return results
-
-                # Method 3: Try using Bing
-                results = await self._search_with_bing(query, num_results)
+                # If we've encountered multiple blocks, prioritize alternative search engines
+                # without further Google attempts
+                if consecutive_blocks >= 2:
+                    logger.warning(f"Detected {consecutive_blocks} consecutive blocks. Prioritizing alternative search engines.")
+                    
+                    # Create a list of alternative search engine methods to try
+                    alternative_engines = [
+                        (self._search_with_bing, "Bing"),
+                        (self._search_with_duckduckgo, "DuckDuckGo"),
+                        # Add more alternative engines here if available
+                    ]
+                    
+                    # Try each alternative engine
+                    for search_method, engine_name in alternative_engines:
+                        try:
+                            logger.info(f"Trying {engine_name} search for query: {query}")
+                            results = await search_method(query, num_results)
+                            if results:
+                                logger.info(f"Successfully retrieved {len(results)} results from {engine_name}")
+                                return results
+                        except Exception as e:
+                            logger.error(f"Error in {engine_name} search: {str(e)}")
+                    
+                    # If all alternative engines failed, continue with the next retry attempt
+                    continue
                 
-                if results and len(results) > 0:
-                    logger.info(f"Bing search returned {len(results)} results")
-                    return results
+                # If we haven't hit the consecutive blocks threshold, try alternative engines one by one
+                # Method 3: Try Bing
+                try:
+                    bing_results = await self._search_with_bing(query, num_results)
+                    if bing_results:
+                        logger.info(f"Successfully retrieved {len(bing_results)} results from Bing")
+                        return bing_results
+                except Exception as e:
+                    logger.error(f"Error in Bing search: {str(e)}")
                 
-                # Method 4: Try using DuckDuckGo as a proxy to Google
-                results = await self._search_with_duckduckgo(query, num_results)
-                
-                if results and len(results) > 0:
-                    logger.info(f"DuckDuckGo search returned {len(results)} results")
-                    return results
+                # Method 4: Try DuckDuckGo
+                try:
+                    ddg_results = await self._search_with_duckduckgo(query, num_results)
+                    if ddg_results:
+                        logger.info(f"Successfully retrieved {len(ddg_results)} results from DuckDuckGo")
+                        return ddg_results
+                except Exception as e:
+                    logger.error(f"Error in DuckDuckGo search: {str(e)}")
             
             logger.error(f"All search methods and retries failed for query: {query}")
             return []
@@ -1128,6 +1175,26 @@ class BypassSerpAnalyzer:
         try:
             logger.info("Attempting to solve CAPTCHA")
             
+            # Take a screenshot of the CAPTCHA page for debugging
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            captcha_screenshot_path = f"debug/captcha_screenshot_{timestamp}.png"
+            await page.screenshot(path=captcha_screenshot_path)
+            logger.info(f"Saved CAPTCHA screenshot to {captcha_screenshot_path}")
+            
+            # First approach: Try to bypass CAPTCHA by refreshing the page
+            # This sometimes works as Google may serve a non-CAPTCHA page on refresh
+            logger.info("Trying to bypass CAPTCHA by refreshing the page")
+            try:
+                await page.reload(timeout=10000, wait_until="networkidle")
+                # Check if CAPTCHA is still present after refresh
+                captcha_still_present = await self.enhanced_check_for_captcha(page)
+                if not captcha_still_present:
+                    logger.info("Successfully bypassed CAPTCHA by refreshing the page")
+                    return True
+            except Exception as e:
+                logger.warning(f"Error refreshing page: {str(e)}")
+            
+            # Second approach: Try to handle reCAPTCHA
             # First, try to find and click the reCAPTCHA checkbox (the simple version)
             recaptcha_checkbox_selectors = [
                 "#recaptcha-anchor",  # Standard reCAPTCHA checkbox
@@ -1142,33 +1209,48 @@ class BypassSerpAnalyzer:
             recaptcha_iframe = await page.query_selector("iframe[src*='recaptcha']")
             if recaptcha_iframe:
                 logger.info("Found reCAPTCHA iframe, switching to it")
-                frame = await recaptcha_iframe.content_frame()
-                if frame:
-                    # Look for the checkbox within the iframe
-                    checkbox = await frame.query_selector("#recaptcha-anchor")
-                    if checkbox:
-                        logger.info("Found reCAPTCHA checkbox in iframe, clicking it")
-                        await checkbox.click()
-                        # Wait for the checkbox to be checked
-                        try:
-                            await frame.wait_for_selector("#recaptcha-anchor[aria-checked='true']", timeout=5000)
-                            logger.info("Successfully clicked reCAPTCHA checkbox")
-                            # Wait a moment for any verification to complete
-                            await page.wait_for_timeout(2000)
-                            return True
-                        except Exception as e:
-                            logger.warning(f"Checkbox clicked but verification failed: {str(e)}")
+                try:
+                    frame = await recaptcha_iframe.content_frame()
+                    if frame:
+                        # Look for the checkbox within the iframe
+                        checkbox = await frame.query_selector("#recaptcha-anchor")
+                        if checkbox:
+                            logger.info("Found reCAPTCHA checkbox in iframe, clicking it")
+                            # Use force:true to overcome potential overlay issues
+                            try:
+                                await checkbox.click(timeout=5000, force=True)
+                                # Wait for the checkbox to be checked
+                                try:
+                                    await frame.wait_for_selector("#recaptcha-anchor[aria-checked='true']", timeout=5000)
+                                    logger.info("Successfully clicked reCAPTCHA checkbox")
+                                    # Wait a moment for any verification to complete
+                                    await page.wait_for_timeout(2000)
+                                    return True
+                                except Exception as e:
+                                    logger.warning(f"Checkbox clicked but verification failed: {str(e)}")
+                            except Exception as click_error:
+                                logger.warning(f"Error clicking checkbox: {str(click_error)}")
+                except Exception as frame_error:
+                    logger.warning(f"Error handling iframe: {str(frame_error)}")
             
             # If no iframe or iframe handling failed, try direct checkbox selectors
             for selector in recaptcha_checkbox_selectors:
-                checkbox = await page.query_selector(selector)
-                if checkbox:
-                    logger.info(f"Found CAPTCHA checkbox with selector: {selector}")
-                    await checkbox.click()
-                    logger.info("Clicked CAPTCHA checkbox")
-                    # Wait a moment for any verification to complete
-                    await page.wait_for_timeout(2000)
-                    return True
+                try:
+                    checkbox = await page.query_selector(selector)
+                    if checkbox:
+                        logger.info(f"Found CAPTCHA checkbox with selector: {selector}")
+                        try:
+                            # Use force:true and reduced timeout to avoid hanging
+                            await checkbox.click(timeout=5000, force=True)
+                            logger.info("Clicked CAPTCHA checkbox")
+                            # Wait a moment for any verification to complete
+                            await page.wait_for_timeout(2000)
+                            return True
+                        except Exception as click_error:
+                            logger.warning(f"Error clicking checkbox with selector {selector}: {str(click_error)}")
+                except Exception as selector_error:
+                    logger.warning(f"Error with selector {selector}: {str(selector_error)}")
+                    continue
             
             # If no checkbox found, try to find the image CAPTCHA
             captcha_img = await page.query_selector("img[src*='captcha']")
