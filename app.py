@@ -822,6 +822,7 @@ def api_search():
             return jsonify({"error": "Query parameter is required"}), 400
         
         # Log the request
+        logger.info(f"API Search called with query: '{query}', num_results: {num_results}")
         print(f"API Search called with query: '{query}', num_results: {num_results}")
         
         # For simple queries, we can return mock results immediately
@@ -947,16 +948,57 @@ def api_search():
             return output_data
         
         # Run the async function in the event loop
-        result = loop.run_until_complete(run_search())
-        loop.close()
+        try:
+            asyncio.set_event_loop(loop)
+            results = loop.run_until_complete(run_search())
+        except Exception as e:
+            logger.error(f"Error running search in event loop: {str(e)}")
+            traceback.print_exc()
+            return jsonify({"error": f"Error during search execution: {str(e)}"}), 500
+        finally:
+            try:
+                loop.close()
+            except Exception as loop_close_error:
+                logger.error(f"Error closing event loop: {str(loop_close_error)}")
         
-        return jsonify(result)
-    
+        # Validate results is a dictionary
+        if not isinstance(results, dict):
+            logger.error(f"Unexpected results type: {type(results)}")
+            return jsonify({"error": "Search returned invalid data format"}), 500
+        
+        try:
+            # Save results to file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename_query = re.sub(r'\W+', '_', query)
+            json_filename = f"{filename_query}_{timestamp}.json"
+            
+            # Ensure results directory exists
+            os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
+            
+            # Save to file
+            json_path = os.path.join(app.config['RESULTS_FOLDER'], json_filename)
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=4)
+            
+            # Add the file information
+            results['files'] = {
+                "json": json_filename,
+                "csv": f"{filename_query}_{timestamp}.csv"
+            }
+            
+            return jsonify(results)
+        except Exception as file_error:
+            logger.error(f"Error saving results to file: {str(file_error)}")
+            traceback.print_exc()
+            # Still return the results even if saving failed
+            return jsonify({"results": results.get("results", []), 
+                          "query": query,
+                          "timestamp": datetime.now().isoformat(),
+                          "error": f"Results generated but could not be saved: {str(file_error)}"})
     except Exception as e:
-        import traceback
-        print(f"Error in API search: {str(e)}")
+        logger.error(f"Unhandled error in API search: {str(e)}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Unhandled server error: {str(e)}"}), 500
 
 async def analyze_page(url, session):
     """Analyze a single page for detailed SEO data."""
