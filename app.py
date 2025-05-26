@@ -756,70 +756,112 @@ def api_generate_blog(query):
 
 @app.route('/api/simple-search', methods=['POST'])
 def simple_search():
-    """Simplified API endpoint for testing search functionality."""
+    """Simplified API endpoint for testing search functionality.
+    This is a lightweight endpoint that returns mock results without actually performing a search.
+    It's useful for testing the frontend without hitting the real search functionality.
+    """
+    # Global try-except to ensure we always return valid JSON
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-        
-        query = data.get('query', '')
-        num_results = int(data.get('num_results', 10))
-        
-        if not query:
-            return jsonify({"error": "Query parameter is required"}), 400
+        # Parse request data safely
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({"error": "No JSON data provided"}), 400
+            
+            query = data.get('query', '')
+            try:
+                num_results = int(data.get('num_results', 10))
+            except (ValueError, TypeError):
+                num_results = 10
+                logger.warning(f"Invalid num_results value, using default: 10")
+            
+            if not query:
+                return jsonify({"error": "Query parameter is required"}), 400
+        except Exception as parse_error:
+            logger.error(f"Error parsing request data: {str(parse_error)}")
+            return jsonify({"error": f"Invalid request format: {str(parse_error)}"}), 400
         
         # Log the request
+        logger.info(f"Simple Search API called with query: '{query}', num_results: {num_results}")
         print(f"Simple Search API called with query: '{query}', num_results: {num_results}")
         
         # Generate mock results instead of actually searching
-        mock_results = [
-            {
-                "url": f"https://example.com/result-{i+1}",
-                "title": f"Example Result {i+1} for '{query}'",
-                "description": f"This is a mock search result for the query '{query}'. Result number {i+1}."
-            } for i in range(min(num_results, 5))  # Limit to 5 results max
-        ]
-        
-        # Create response data
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename_query = re.sub(r'\W+', '_', query)
-        json_filename = f"{filename_query}_{timestamp}.json"
-        
-        output_data = {
-            "query": query,
-            "timestamp": datetime.now().isoformat(),
-            "results": mock_results,
-            "files": {
-                "json": json_filename,
-                "csv": f"{filename_query}_{timestamp}.csv"
+        try:
+            mock_results = [
+                {
+                    "url": f"https://example.com/result-{i+1}",
+                    "title": f"Example Result {i+1} for '{query}'",
+                    "description": f"This is a mock search result for the query '{query}'. Result number {i+1}."
+                } for i in range(min(num_results, 5))  # Limit to 5 results max
+            ]
+            
+            # Create response data
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename_query = re.sub(r'\W+', '_', query)
+            json_filename = f"{filename_query}_{timestamp}.json"
+            
+            output_data = {
+                "query": query,
+                "timestamp": datetime.now().isoformat(),
+                "results": mock_results,
+                "files": {
+                    "json": json_filename,
+                    "csv": f"{filename_query}_{timestamp}.csv"
+                }
             }
-        }
-        
-        # Don't actually save to file to keep it simple
-        
-        return jsonify(output_data)
+            
+            # Don't actually save to file to keep it simple
+            
+            return jsonify(output_data)
+        except Exception as results_error:
+            logger.error(f"Error generating mock results: {str(results_error)}")
+            return jsonify({
+                "query": query,
+                "error": f"Error generating results: {str(results_error)}",
+                "results": []
+            }), 500
     
     except Exception as e:
+        # Catch-all exception handler to ensure we always return valid JSON
         import traceback
-        print(f"Error in simple search API: {str(e)}")
+        error_msg = f"Unhandled error in simple search API: {str(e)}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
+        print(error_msg)
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        
+        # Always return valid JSON, even in case of catastrophic failure
+        return jsonify({
+            "error": "Server error occurred. Please try again later.",
+            "error_details": str(e),
+            "results": []
+        }), 500
 
 @app.route('/api/search', methods=['POST'])
 def api_search():
     """API endpoint for the frontend to search and analyze SERP results.
     This is a synchronous version that uses a thread to run the async operations.
     """
+    # Global try-except to catch any unexpected errors
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-        
-        query = data.get('query', '')
-        num_results = int(data.get('num_results', 10))
-        
-        if not query:
-            return jsonify({"error": "Query parameter is required"}), 400
+        # Parse request data safely
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({"error": "No JSON data provided"}), 400
+            
+            query = data.get('query', '')
+            try:
+                num_results = int(data.get('num_results', 10))
+            except (ValueError, TypeError):
+                num_results = 10
+                logger.warning(f"Invalid num_results value, using default: 10")
+            
+            if not query:
+                return jsonify({"error": "Query parameter is required"}), 400
+        except Exception as parse_error:
+            logger.error(f"Error parsing request data: {str(parse_error)}")
+            return jsonify({"error": f"Invalid request format: {str(parse_error)}"}), 400
         
         # Log the request
         logger.info(f"API Search called with query: '{query}', num_results: {num_results}")
@@ -996,9 +1038,21 @@ def api_search():
                           "timestamp": datetime.now().isoformat(),
                           "error": f"Results generated but could not be saved: {str(file_error)}"})
     except Exception as e:
-        logger.error(f"Unhandled error in API search: {str(e)}")
+        # Catch-all exception handler to ensure we always return valid JSON
+        error_msg = f"Unhandled error in API search: {str(e)}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
+        print(error_msg)
         traceback.print_exc()
-        return jsonify({"error": f"Unhandled server error: {str(e)}"}), 500
+        
+        # Always return valid JSON, even in case of catastrophic failure
+        return jsonify({
+            "error": "Server error occurred. Please try again later.",
+            "error_details": str(e),
+            "results": [],
+            "query": data.get('query', '') if 'data' in locals() and data else "unknown",
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 async def analyze_page(url, session):
     """Analyze a single page for detailed SEO data."""
