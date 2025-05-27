@@ -913,7 +913,10 @@ def api_search():
             if hasattr(analyzer, 'analyze_serp_for_api') and callable(getattr(analyzer, 'analyze_serp_for_api')):
                 print(f"Using analyze_serp_for_api method from BypassSerpAnalyzer for query: {query}")
                 # This method does everything: search, analyze pages, and format results
-                return await analyzer.analyze_serp_for_api(query, num_results)
+                results = await analyzer.analyze_serp_for_api(query, num_results)
+                # Ensure we're returning a JSON response, not a dictionary
+                if isinstance(results, dict):
+                    return jsonify(results)
             
             # Fallback to our implementation if analyze_serp_for_api is not available
             print(f"Fallback: Using search_google + analyze_page for query: {query}")
@@ -921,12 +924,12 @@ def api_search():
             search_results = await analyzer.search_google(query, num_results)
             
             if not search_results:
-                return {
+                return jsonify({
                     "query": query,
                     "timestamp": datetime.now().isoformat(),
                     "results": [],
                     "error": "No search results found"
-                }
+                })
             
             # Process results - analyze each page in detail
             analyzed_pages = []
@@ -987,7 +990,7 @@ def api_search():
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(output_data, f, indent=4)
             
-            return output_data
+            return jsonify(output_data)
         
         # Run the async function in the event loop
         try:
@@ -996,7 +999,12 @@ def api_search():
         except Exception as e:
             logger.error(f"Error running search in event loop: {str(e)}")
             traceback.print_exc()
-            return jsonify({"error": f"Error during search execution: {str(e)}"}), 500
+            return jsonify({
+                "error": f"Error during search execution: {str(e)}",
+                "results": [],
+                "query": query,
+                "timestamp": datetime.now().isoformat()
+            }), 500
         finally:
             try:
                 loop.close()
