@@ -186,7 +186,18 @@ def update_proxy_status(proxy_url, success=True, response_time_ms=None, country_
                 proxy_status.average_response_time_ms = response_time_ms
         
         session.commit()
-        logger.info(f"Updated proxy status for {proxy_url}")
+        # Mask the proxy URL before logging it
+        masked_proxy = proxy_url
+        if '://' in proxy_url and '@' in proxy_url:
+            protocol = proxy_url.split('://')[0]
+            rest = proxy_url.split('://')[1]
+            auth, host = rest.split('@', 1)
+            masked_proxy = f"{protocol}://****:****@{host}"
+        elif '://' in proxy_url:
+            protocol = proxy_url.split('://')[0]
+            host = proxy_url.split('://')[1]
+            masked_proxy = f"{protocol}://{host}"
+        logger.info(f"Updated proxy status for {masked_proxy}")
     except Exception as e:
         session.rollback()
         logger.error(f"Error updating proxy status: {str(e)}")

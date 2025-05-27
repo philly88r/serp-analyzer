@@ -370,7 +370,8 @@ class BypassSerpAnalyzer:
                         proxy_url = proxy_manager.get_proxy() # Get string URL directly
                         # Removed: proxy_manager.report_success(proxy_url, response_time_ms)
                         if proxy_url:
-                            logger.info(f"Using proxy for page analysis: {proxy_url}")
+                            masked_proxy = proxy_manager._mask_proxy_url(proxy_url) if hasattr(proxy_manager, '_mask_proxy_url') else proxy_url
+                            logger.info(f"Using proxy for page analysis: {masked_proxy}")
                         else:
                             logger.info("No proxy returned by proxy_manager for page analysis.")
                     except NameError:
@@ -887,7 +888,9 @@ class BypassSerpAnalyzer:
                             proxy_config_playwright["username"] = parsed_url.username
                         if parsed_url.password:
                             proxy_config_playwright["password"] = parsed_url.password
-                        logger.info(f"Playwright will use proxy server: {proxy_config_playwright['server']}")
+                        # Mask the proxy server URL before logging it
+                        masked_server = proxy_manager._mask_proxy_url(proxy_config_playwright['server']) if hasattr(proxy_manager, '_mask_proxy_url') else proxy_config_playwright['server']
+                        logger.info(f"Playwright will use proxy server: {masked_server}")
                     else:
                         logger.info("No proxy returned by proxy_manager for Playwright search.")
                 except NameError:
@@ -1547,7 +1550,9 @@ class BypassSerpAnalyzer:
                             logger.error("Install with: pip install aiohttp_socks")
                             proxy_url_http = None
                     else:
-                        logger.info(f"Using HTTP proxy for direct HTTP search: {proxy_url_http}")
+                        # Mask the proxy URL before logging it
+                        masked_proxy = proxy_manager._mask_proxy_url(proxy_url_http) if hasattr(proxy_manager, '_mask_proxy_url') else proxy_url_http
+                        logger.info(f"Using HTTP proxy for direct HTTP search: {masked_proxy}")
                 else:
                     logger.info("No proxy returned by proxy_manager for direct HTTP search.")
             except NameError:
